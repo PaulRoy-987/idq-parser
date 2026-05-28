@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IDQ Rule Parser</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:#0e0f11;--surface:#161719;--surface2:#1e2023;--border:#2a2d32;--border2:#353a40;
+    --text:#e8eaed;--text2:#8b909a;--text3:#545a64;
+    --accent:#4ade80;--accent-dim:#1a3a25;
+    --blue:#60a5fa;--blue-dim:#1a2a3a;
+    --amber:#fbbf24;--amber-dim:#2a2010;
+    --purple:#a78bfa;--purple-dim:#1e1a30;
+    --coral:#f87171;--coral-dim:#2a1a1a;
+    --teal:#2dd4bf;--teal-dim:#0a2a28;
+    --rose:#fb7185;--rose-dim:#2a1020;
+    --sky:#38bdf8;--sky-dim:#0a1e2a;
+    --orange:#fb923c;--orange-dim:#2a1808;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;font-size:14px;}
+
+  .header{border-bottom:1px solid var(--border);padding:16px 32px;display:flex;align-items:center;gap:12px;}
+  .logo{width:28px;height:28px;background:var(--accent);border-radius:6px;display:flex;align-items:center;justify-content:center;}
+  .logo svg{width:16px;height:16px;}
+  .header-title{font-size:15px;font-weight:500;}
+  .header-sub{font-size:11px;color:var(--text3);margin-left:auto;font-family:'DM Mono',monospace;}
+  .main{max-width:1100px;margin:0 auto;padding:40px 28px;}
+
+  /* UPLOAD */
+  .upload-zone{border:1.5px dashed var(--border2);border-radius:16px;padding:64px 32px;text-align:center;cursor:pointer;transition:all 0.2s;background:var(--surface);position:relative;}
+  .upload-zone:hover,.upload-zone.drag{border-color:var(--accent);background:#0e1810;}
+  .upload-zone input{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;}
+  .upload-icon{width:56px;height:56px;margin:0 auto 20px;background:var(--surface2);border-radius:14px;display:flex;align-items:center;justify-content:center;border:1px solid var(--border);}
+  .upload-icon svg{width:24px;height:24px;color:var(--accent);}
+  .upload-title{font-size:18px;font-weight:500;margin-bottom:8px;}
+  .upload-sub{color:var(--text2);font-size:13px;}
+  .upload-badge{display:inline-block;margin-top:16px;background:var(--accent-dim);color:var(--accent);font-family:'DM Mono',monospace;font-size:11px;padding:4px 10px;border-radius:4px;border:1px solid #2a5a35;}
+
+  /* PROCESSING */
+  .processing{text-align:center;padding:48px;display:none;}
+  .spinner{width:40px;height:40px;margin:0 auto 20px;border:2px solid var(--border2);border-top-color:var(--accent);border-radius:50%;animation:spin 0.7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .proc-label{color:var(--text2);font-size:13px;}
+  .proc-step{font-family:'DM Mono',monospace;font-size:12px;color:var(--accent);margin-top:8px;}
+  .proc-bar-wrap{width:280px;margin:16px auto 0;background:var(--border);border-radius:4px;height:3px;}
+  .proc-bar{height:3px;background:var(--accent);border-radius:4px;width:0%;transition:width 0.4s;}
+
+  /* ERROR */
+  .error-box{display:none;background:var(--coral-dim);border:1px solid #5a2020;border-radius:10px;padding:16px 20px;color:var(--coral);font-size:13px;margin-top:24px;}
+
+  /* RESULTS */
+  .results{display:none;}
+  .file-info{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 18px;margin-bottom:20px;flex-wrap:wrap;}
+  .file-icon{width:36px;height:36px;background:var(--accent-dim);border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+  .file-icon svg{width:18px;height:18px;color:var(--accent);}
+  .file-name{font-weight:500;font-size:13px;}
+  .file-meta{font-size:11px;color:var(--text3);margin-top:2px;font-family:'DM Mono',monospace;}
+  .reset-btn{margin-left:auto;font-size:12px;color:var(--text3);background:none;border:1px solid var(--border);border-radius:6px;padding:5px 12px;cursor:pointer;font-family:inherit;transition:all 0.15s;}
+  .reset-btn:hover{border-color:var(--border2);color:var(--text2);}
+
+  /* STATS */
+  .stats{display:flex;gap:10px;margin-bottom:20px;flex-wrap:wrap;}
+  .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 16px;min-width:110px;flex:1;}
+  .stat-label{font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;}
+  .stat-val{font-size:20px;font-weight:500;}
+  .stat-val.green{color:var(--accent);}  .stat-val.blue{color:var(--blue);}
+  .stat-val.amber{color:var(--amber);} .stat-val.purple{color:var(--purple);}
+  .stat-val.teal{color:var(--teal);}   .stat-val.rose{color:var(--rose);}
+
+  /* TOOLBAR */
+  .toolbar{display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap;}
+  .search-wrap{position:relative;flex:1;min-width:180px;}
+  .search-wrap svg{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:14px;height:14px;color:var(--text3);pointer-events:none;}
+  .search-box{width:100%;background:var(--surface);border:1px solid var(--border2);border-radius:7px;padding:7px 12px 7px 32px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;}
+  .search-box:focus{border-color:var(--accent);}
+  .filter-select{background:var(--surface);border:1px solid var(--border2);border-radius:7px;padding:7px 10px;color:var(--text2);font-family:'DM Sans',sans-serif;font-size:12px;outline:none;cursor:pointer;}
+  .filter-select:focus{border-color:var(--accent);}
+
+  /* TABS */
+  .tabs{display:flex;gap:2px;margin-bottom:16px;border-bottom:1px solid var(--border);overflow-x:auto;padding-bottom:0;}
+  .tab{background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;font-size:12px;color:var(--text3);padding:7px 14px;border-radius:6px 6px 0 0;border-bottom:2px solid transparent;margin-bottom:-1px;transition:all 0.15s;white-space:nowrap;}
+  .tab:hover{color:var(--text2);}  .tab.active{color:var(--text);border-bottom-color:var(--accent);}
+
+  /* TABLE */
+  .table-wrap{overflow-x:auto;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th{text-align:left;padding:8px 12px;font-size:10px;font-weight:500;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.05em;background:var(--surface2);border-bottom:1px solid var(--border);white-space:nowrap;}
+  td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top;line-height:1.5;}
+  tr:last-child td{border-bottom:none;}  tr:hover td{background:var(--surface2);}
+  tr.hidden-row{display:none;}
+  .table-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:16px;}
+
+  .group-head{font-size:11px;font-weight:500;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.06em;padding:8px 14px;background:#111214;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;}
+  .group-head:hover{background:#141618;}
+  .group-head .chevron{font-size:10px;transition:transform 0.15s;display:inline-block;margin-left:auto;color:var(--text3);}
+  .group-head.collapsed .chevron{transform:rotate(-90deg);}
+  .group-body.collapsed{display:none;}
+
+  .badge{display:inline-block;font-size:10px;font-weight:500;padding:2px 7px;border-radius:4px;white-space:nowrap;font-family:'DM Mono',monospace;}
+  .badge-addr{background:var(--blue-dim);color:var(--blue);border:1px solid #1e3a5a;}
+  .badge-noaddr{background:var(--accent-dim);color:var(--accent);border:1px solid #2a5a35;}
+  .badge-filter{background:var(--amber-dim);color:var(--amber);border:1px solid #5a4010;}
+  .badge-logic{background:var(--purple-dim);color:var(--purple);border:1px solid #2a1a5a;}
+  .badge-scoring{background:var(--teal-dim);color:var(--teal);border:1px solid #0a3a38;}
+  .badge-cleanse{background:#1a1a2a;color:#c084fc;border:1px solid #3a2a5a;}
+  .badge-special{background:var(--sky-dim);color:var(--sky);border:1px solid #0a2535;}
+  .badge-mapplet{background:var(--rose-dim);color:var(--rose);border:1px solid #3a1025;}
+  .badge-lookup{background:var(--orange-dim);color:var(--orange);border:1px solid #3a2008;}
+
+  .prio{font-family:'DM Mono',monospace;font-size:11px;font-weight:500;}
+  .prio.high{color:var(--accent);} .prio.mid{color:var(--blue);}
+  .prio.low{color:var(--amber);} .prio.none{color:var(--text3);}
+
+  .criteria-text{color:var(--text2);font-size:11px;line-height:1.65;font-family:'DM Mono',monospace;white-space:pre-wrap;word-break:break-word;max-width:480px;}
+
+  .export-row{display:flex;justify-content:flex-end;margin:0;gap:8px;}
+  .btn{background:none;border:1px solid var(--border2);border-radius:7px;color:var(--text2);font-family:'DM Sans',sans-serif;font-size:11px;padding:6px 12px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:5px;}
+  .btn:hover{border-color:var(--accent);color:var(--accent);}
+  .btn svg{width:13px;height:13px;}
+  .btn.spec-btn{border-color:var(--blue);color:var(--blue);}
+  .btn.spec-btn:hover{border-color:var(--sky);color:var(--sky);background:var(--blue-dim);}
+  .btn:disabled{opacity:0.35;cursor:not-allowed;}
+
+  .xml-type-badge{display:inline-block;font-size:10px;padding:2px 8px;border-radius:4px;font-family:'DM Mono',monospace;font-weight:500;margin-left:8px;vertical-align:middle;}
+  .xml-type-match{background:var(--accent-dim);color:var(--accent);}
+  .xml-type-cleanse{background:var(--purple-dim);color:var(--purple);}
+  .xml-type-service{background:var(--sky-dim);color:var(--sky);}
+  .xml-type-complex{background:var(--rose-dim);color:var(--rose);}
+  .xml-type-generic{background:var(--teal-dim);color:var(--teal);}
+
+  .empty-state{padding:28px;text-align:center;color:var(--text3);font-size:13px;}
+  .tab-panel{display:none;} .tab-panel.active{display:block;}
+  .no-results{padding:20px;text-align:center;color:var(--text3);font-size:12px;font-family:'DM Mono',monospace;}
+  .decode-table{width:100%;border-collapse:collapse;font-size:11px;}
+  .decode-table td{padding:4px 8px;border-bottom:1px solid var(--border);font-family:'DM Mono',monospace;vertical-align:top;}
+  .decode-table tr:last-child td{border-bottom:none;}
+  .decode-cond{color:var(--text2);max-width:320px;}
+  .decode-result{color:var(--accent);font-weight:500;white-space:nowrap;}
+
+  /* ═══ SPEC OVERLAY ═══════════════════════════════════════════════════════ */
+  .spec-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:200;display:none;justify-content:flex-end;}
+  .spec-overlay.open{display:flex;}
+  .spec-panel{background:#fff;width:min(780px,95vw);height:100vh;display:flex;flex-direction:column;box-shadow:-8px 0 32px rgba(0,0,0,0.4);}
+  .spec-header{background:#1F3864;color:#fff;padding:16px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
+  .spec-header-title{font-size:15px;font-weight:600;flex:1;}
+  .spec-header-sub{font-size:11px;opacity:0.7;}
+  .spec-close{background:none;border:none;color:#fff;font-size:20px;cursor:pointer;padding:0 4px;line-height:1;opacity:0.8;}
+  .spec-close:hover{opacity:1;}
+  .spec-toolbar{background:#f5f7fa;border-bottom:1px solid #dde3ec;padding:10px 20px;display:flex;gap:8px;align-items:center;flex-shrink:0;}
+  .spec-dl-btn{background:#fff;border:1px solid #c5cedd;border-radius:6px;padding:6px 14px;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;display:flex;align-items:center;gap:6px;color:#334155;transition:all 0.15s;}
+  .spec-dl-btn:hover{border-color:#2E75B6;color:#2E75B6;}
+  .spec-dl-btn svg{width:14px;height:14px;}
+  .spec-regen-btn{background:none;border:1px solid #2E75B6;color:#2E75B6;border-radius:6px;padding:6px 14px;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;margin-left:auto;transition:all 0.15s;}
+  .spec-regen-btn:hover{background:#2E75B6;color:#fff;}
+  .spec-regen-btn:disabled{opacity:0.4;cursor:not-allowed;}
+  .spec-body{flex:1;overflow-y:auto;padding:28px 32px;font-family:'DM Sans',sans-serif;font-size:13px;color:#1a1a2e;line-height:1.7;}
+
+  /* Spec content styles (light theme) */
+  .spec-body h1{font-size:22px;color:#1F3864;border-bottom:2px solid #1F3864;padding-bottom:8px;margin:0 0 20px;}
+  .spec-body h2{font-size:16px;color:#2E75B6;margin:24px 0 10px;padding-bottom:4px;border-bottom:1px solid #dde3ec;}
+  .spec-body h3{font-size:13px;font-weight:600;color:#334155;margin:14px 0 6px;}
+  .spec-body p{margin-bottom:10px;color:#334155;}
+  .spec-body ul,.spec-body ol{padding-left:22px;margin:6px 0 12px;}
+  .spec-body li{margin:3px 0;color:#334155;}
+  .spec-body table{width:100%;border-collapse:collapse;margin:10px 0 16px;font-size:12px;}
+  .spec-body th{background:#2E75B6;color:#fff;padding:7px 10px;text-align:left;font-weight:500;}
+  .spec-body td{padding:6px 10px;border:1px solid #dde3ec;vertical-align:top;}
+  .spec-body tr:nth-child(even) td{background:#f0f5fb;}
+  .spec-body .req-box{border:1px solid #dde3ec;border-radius:8px;margin:10px 0 16px;overflow:hidden;}
+  .spec-body .req-box table{margin:0;}
+  .spec-body .req-box td:first-child{background:#f5f7fa;font-weight:600;width:30%;color:#1F3864;}
+  .spec-body .req-box td{border-color:#dde3ec;}
+  .spec-body .cover{text-align:center;padding:32px 0 24px;}
+  .spec-body .cover h1{border:none;font-size:24px;}
+  .spec-body .cover .meta{color:#64748b;font-size:12px;margin-top:8px;}
+  .spec-body .tag{display:inline-block;background:#e0efff;color:#1e40af;font-size:10px;padding:2px 7px;border-radius:3px;margin:2px;font-weight:500;}
+  .spec-body .section-num{color:#94a3b8;margin-right:6px;}
+  .spec-generating{text-align:center;padding:60px 20px;color:#64748b;}
+  .spec-generating .sp{width:36px;height:36px;border:2px solid #dde3ec;border-top-color:#2E75B6;border-radius:50%;animation:spin 0.7s linear infinite;margin:0 auto 16px;}
+  .spec-generating p{font-size:13px;} .spec-generating .sub{font-size:11px;color:#94a3b8;margin-top:6px;}
+  .spec-error{text-align:center;padding:40px 20px;color:#dc2626;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo"><svg viewBox="0 0 16 16" fill="none"><path d="M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z" fill="#0e0f11"/></svg></div>
+  <span class="header-title">IDQ Rule Parser</span>
+  <span class="header-sub">Informatica Data Quality · Universal IMX Parser v2</span>
+</div>
+
+<div class="main">
+  <div id="uploadSection">
+    <div class="upload-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".xml,.imx">
+      <div class="upload-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 12V4M8 8l4-4 4 4"/></svg></div>
+      <div class="upload-title">Drop your IMX / XML file here</div>
+      <div class="upload-sub">Match rules · Cleanse mapplets · Service rules · Complex orchestration mapplets</div>
+      <div class="upload-badge">.xml · .imx · Any IDQ IMX export</div>
+    </div>
+    <div class="error-box" id="errorBox"></div>
+  </div>
+
+  <div class="processing" id="processingSection">
+    <div class="spinner"></div>
+    <div class="proc-label">Parsing IDQ definitions…</div>
+    <div class="proc-step" id="procStep">reading file</div>
+    <div class="proc-bar-wrap"><div class="proc-bar" id="procBar"></div></div>
+  </div>
+
+  <div class="results" id="resultsSection">
+    <div class="file-info" id="fileInfo"></div>
+    <div class="stats" id="statsRow"></div>
+    <div class="toolbar">
+      <div class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" class="search-box" id="searchBox" placeholder="Search rules, fields, criteria…" oninput="applySearch()">
+      </div>
+      <select class="filter-select" id="txFilter" onchange="applySearch()">
+        <option value="">All transformations</option>
+      </select>
+      <button class="btn spec-btn" id="specBtn" onclick="openSpec()" disabled>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+        Generate Spec
+      </button>
+      <div class="export-row">
+        <button class="btn" onclick="exportCSV()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/></svg>CSV
+        </button>
+        <button class="btn" onclick="exportJSON()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>JSON
+        </button>
+      </div>
+    </div>
+    <div class="tabs" id="tabsRow"></div>
+    <div id="tabPanels"></div>
+  </div>
+</div>
+
+<!-- SPEC OVERLAY -->
+<div class="spec-overlay" id="specOverlay">
+  <div class="spec-panel">
+    <div class="spec-header">
+      <svg style="width:18px;height:18px;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>
+      <span class="spec-header-title">Technical Specification</span>
+      <span class="spec-header-sub" id="specHeaderSub"></span>
+      <button class="spec-close" onclick="closeSpec()">✕</button>
+    </div>
+    <div class="spec-toolbar">
+      <button class="spec-dl-btn" onclick="downloadSpecTxt()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15V3m0 12l-4-4m4 4l4-4M2 17l.621 2.485A2 2 0 004.561 21h14.878a2 2 0 001.94-1.515L22 17"/></svg>
+        Download TXT
+      </button>
+      <button class="spec-dl-btn" onclick="downloadSpecWord()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+        Download Word (.doc)
+      </button>
+      <button class="spec-regen-btn" id="specRegenBtn" onclick="generateSpec()">↻ Regenerate</button>
+    </div>
+    <div class="spec-body" id="specBody">
+      <div class="spec-generating">
+        <div class="sp"></div>
+        <p>Analysing mapping and generating specification…</p>
+        <p class="sub" id="specGenStep">Extracting context</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// STATE
+// ─────────────────────────────────────────────
+let parsedRules = [];
+let activeTabs  = [];
+let currentMappingName = '';
+let currentXmlType = '';
+let currentFileName = '';
+let specData = null;  // last generated spec
+
+// ─────────────────────────────────────────────
+// FILE HANDLING
+// ─────────────────────────────────────────────
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('dragover', e=>{e.preventDefault();dropZone.classList.add('drag');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag');const f=e.dataTransfer.files[0];if(f)processFile(f);});
+fileInput.addEventListener('change',e=>{if(e.target.files[0])processFile(e.target.files[0]);});
+
+function showError(msg){const el=document.getElementById('errorBox');el.textContent='⚠ '+msg;el.style.display='block';document.getElementById('processingSection').style.display='none';}
+function setStep(t,pct){document.getElementById('procStep').textContent=t;if(pct!==undefined)document.getElementById('procBar').style.width=pct+'%';}
+
+function processFile(file){
+  currentFileName = file.name;
+  document.getElementById('errorBox').style.display='none';
+  document.getElementById('uploadSection').style.display='none';
+  document.getElementById('processingSection').style.display='block';
+  document.getElementById('resultsSection').style.display='none';
+  document.getElementById('procBar').style.width='0%';
+  const reader=new FileReader();
+  reader.onload=e=>{
+    try{
+      setStep('parsing XML…',10);
+      const xmlStr=e.target.result;
+      if(!xmlStr.includes('imx:IMX')&&!xmlStr.includes('<mapping:Mapping')&&!xmlStr.includes('IMX'))
+        throw new Error('Not a valid Informatica IMX export.');
+      setTimeout(()=>{
+        try{
+          setStep('traversing transformations…',30);
+          const result=extractAll(xmlStr);
+          setStep('building output…',80);
+          parsedRules=result.rules;
+          currentMappingName=result.mappingName;
+          currentXmlType=result.xmlType;
+          setTimeout(()=>renderResults(file,result),200);
+        }catch(err){document.getElementById('uploadSection').style.display='block';showError(err.message);}
+      },50);
+    }catch(err){document.getElementById('uploadSection').style.display='block';showError(err.message);}
+  };
+  reader.readAsText(file);
+}
+
+// ─────────────────────────────────────────────
+// DECODE
+// ─────────────────────────────────────────────
+function decode(s){if(!s)return '';try{return decodeURIComponent(s.replace(/\+/g,' '));}catch(e){return s.replace(/\+/g,' ');}}
+
+// ─────────────────────────────────────────────
+// EXTRACTION
+// ─────────────────────────────────────────────
+function extractAll(xmlStr){
+  const parser=new DOMParser();
+  let doc=parser.parseFromString(xmlStr,'application/xml');
+  if(doc.querySelector('parseerror,parsererror'))doc=parser.parseFromString(xmlStr,'text/xml');
+  let mappingName='Unknown';
+  for(const el of doc.querySelectorAll('*')){const n=el.getAttribute('name')||'';if(n&&(n.includes('_')||n.toLowerCase().includes('rule')||n.toLowerCase().includes('mplt'))){mappingName=n;break;}}
+  const xmlType=detectXmlType(mappingName,xmlStr);
+  const txEls=Array.from(doc.querySelectorAll('*')).filter(el=>el.localName==='AbstractTransformation');
+  const rules=[];
+  txEls.forEach(tx=>{
+    const txName=tx.getAttribute('name')||'';
+    const txType=(tx.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||tx.getAttribute('xsi:type')||'').toLowerCase();
+    if(txType.includes('filter')){
+      const raw=tx.getAttribute('filterCondition')||'';
+      if(raw)rules.push({type:'filter',category:'Filter',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:decode(raw).trim(),exprType:'filter'});
+      Array.from(tx.querySelectorAll('*')).forEach(child=>{const fc=child.getAttribute('filterCondition')||'';const gn=child.getAttribute('name')||'';if(fc&&gn)rules.push({type:'filter',category:'Router Group',txName,ruleName:`${txName} → ${gn}`,priority:'—',priorityClass:'none',criteria:decode(fc).trim(),exprType:'filter'});});
+      return;
+    }
+    if(txType.includes('router')){
+      Array.from(tx.querySelectorAll('*')).forEach(child=>{const fc=child.getAttribute('filterCondition')||'';const gn=child.getAttribute('name')||'';if(fc&&gn&&gn!=='Input'&&gn!=='Default')rules.push({type:'filter',category:'Router Group',txName,ruleName:`${txName} → ${gn}`,priority:'—',priorityClass:'none',criteria:decode(fc).trim(),exprType:'filter'});});
+      return;
+    }
+    if(txType.includes('lookup')){
+      const lc=tx.getAttribute('lookupCondition')||'';const dso=tx.getAttribute('dso')||'';
+      rules.push({type:'lookup',category:'Lookup',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:(lc?'Condition: '+decode(lc):'')+(dso?'\nSource: '+dso:''),exprType:'lookup'});return;
+    }
+    if(txType.includes('tokenstandardiser')){
+      const strats=[];Array.from(tx.querySelectorAll('*')).forEach(c=>{const sn=c.getAttribute('name')||'';const st=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||'');if(st.includes('Strategy')&&sn)strats.push(sn);});
+      rules.push({type:'special',category:'Token Standardiser',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:strats.length?'Strategies: '+strats.join(', '):'Token standardisation',exprType:'tokenStd'});return;
+    }
+    if(txType.includes('labeler')){
+      const lt=tx.getAttribute('labelerType')||'';const strats=[];Array.from(tx.querySelectorAll('*')).forEach(c=>{const sn=c.getAttribute('name')||'';const st=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||'');if(st.includes('Strategy')&&sn)strats.push(sn);});
+      rules.push({type:'special',category:'Labeler',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:`Type: ${lt||'token'}`+(strats.length?'\nStrategies: '+strats.join(', '):''),exprType:'labeler'});return;
+    }
+    if(txType.includes('parsertx')){
+      const strats=[];Array.from(tx.querySelectorAll('*')).forEach(c=>{const sn=c.getAttribute('name')||'';const st=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||'');if(st.includes('Strategy')&&sn)strats.push(sn);});
+      rules.push({type:'special',category:'Parser',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:strats.length?'Strategies: '+strats.join(', '):'Data parser',exprType:'parser'});return;
+    }
+    if(txType.includes('mapplettx')&&!txType.includes('input')&&!txType.includes('output')){
+      const ref=tx.getAttribute('mapplet')||'';
+      rules.push({type:'mapplet',category:'Sub-Mapplet',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:ref?'References: '+ref:'Inline mapplet',exprType:'mapplet'});return;
+    }
+    if(txType.includes('expression')){
+      Array.from(tx.querySelectorAll('*')).filter(el=>{const ex=el.getAttribute('expression')||'';return ex&&!ex.startsWith('http')&&!ex.match(/^\d+\.\d+\.\d+/);}).forEach(field=>{
+        const fn=field.getAttribute('name')||'';const raw=field.getAttribute('expression')||'';if(!raw)return;
+        const dec=decode(raw).trim();if(!dec||dec===fn)return;
+        processField(txName,fn,dec,rules);
+      });
+    }
+  });
+  return{rules,xmlType,mappingName};
+}
+
+function detectXmlType(name,xmlStr){
+  const ln=name.toLowerCase();const lx=xmlStr.substring(0,5000).toLowerCase();
+  if(lx.includes('no+match+found')||lx.includes("no match found"))return 'match';
+  if(ln.includes('cleanse_service')||(ln.includes('cleanse')&&ln.includes('service')))return 'complex';
+  if(ln.includes('cleanse')||ln.includes('stdz'))return 'cleanse';
+  if(ln.includes('service')||ln.includes('doctor')||ln.includes('verify'))return 'service';
+  return 'generic';
+}
+
+function processField(txName,fn,decoded,rules){
+  const upper=decoded.toUpperCase().trimStart();
+  const isMatch=decoded.includes('NO MATCH FOUND');
+  const hasIIF=upper.startsWith('IIF')||upper.includes('\nIIF')||upper.includes(' IIF(');
+  const hasDECODE=upper.startsWith('DECODE')||upper.includes('\nDECODE');
+  const cat=categorize(txName,fn);
+  if(isMatch&&hasIIF){parseIIFChain(decoded).forEach((r,i)=>rules.push({type:cat.type,category:cat.label,txName,exprType:'iif',ruleName:r.label||(fn+' · rule '+(i+1)),priority:r.result,priorityClass:priorityClass(r.result),criteria:cleanCriteria(r.condition)}));}
+  else if(hasDECODE){const pd=parseDECODEChain(decoded);if(pd&&pd.length){rules.push({type:cat.type==='filter'?'filter':'logic',category:cat.label,txName,exprType:'decode',ruleName:fn,priority:'—',priorityClass:'none',criteria:decoded.substring(0,500),criteriaHtml:buildDecodeHtml(pd)});}else{rules.push({type:'logic',category:cat.label,txName,exprType:'expr',ruleName:fn,priority:'—',priorityClass:'none',criteria:summariseExpr(fn,decoded)});}}
+  else if(hasIIF){rules.push({type:cat.type==='filter'?'filter':'logic',category:cat.label,txName,exprType:'iif',ruleName:fn,priority:'—',priorityClass:'none',criteria:summariseExpr(fn,decoded)});}
+  else{if(decoded.length>fn.length+2&&/[()=<>!|]/.test(decoded))rules.push({type:'logic',category:cat.label,txName,exprType:'expr',ruleName:fn,priority:'—',priorityClass:'none',criteria:decoded.substring(0,400)});}
+}
+
+function parseIIFChain(expr){const results=[];function node(s,d){if(d>60||!s)return;s=s.trimStart();if(s.startsWith('(')&&!s.toUpperCase().startsWith('IIF')){node(s.slice(1).trimStart(),d+1);return;}if(!s.toUpperCase().startsWith('IIF'))return;const pi=s.indexOf('(');if(pi===-1)return;const args=splitIIFArgs(s,pi+1);if(!args)return;const[cond,trueP,falseP]=args;const ts=trueP.trim();if(ts.startsWith("'")&&ts.lastIndexOf("'")>0){const rv=ts.slice(1,ts.lastIndexOf("'"));if(rv&&rv.toUpperCase()!=='NO MATCH FOUND'&&rv.toUpperCase()!=='TRANSFORMATION ERROR'){const cm=cond.match(/^\s*--\s*([^\n\r]+)/);results.push({label:cm?cm[1].trim():'',condition:cond.replace(/^\s*--[^\n\r]*[\n\r]+/gm,'').trim(),result:rv});}}else node(ts,d+1);if(falseP)node(falseP.trim(),d+1);}node(expr.trim(),0);return results;}
+
+function splitIIFArgs(str,si){const args=[];let d=0,inS=false,cur='';for(let i=si;i<str.length;i++){const ch=str[i];if(inS){if(ch==="'"&&str[i+1]==="'"){cur+="''";i++;continue;}if(ch==="'")inS=false;cur+=ch;continue;}if(ch==="'"){inS=true;cur+=ch;continue;}if(ch==='('){d++;cur+=ch;continue;}if(ch===')'){if(d===0){args.push(cur);break;}d--;cur+=ch;continue;}if(ch===','&&d===0&&args.length<2){args.push(cur);cur='';continue;}cur+=ch;}if(args.length===2&&cur)args.push(cur);return args.length===3?args:null;}
+
+function parseDECODEChain(expr){const s=expr.trim();if(!s.toUpperCase().startsWith('DECODE'))return null;const pi=s.indexOf('(');if(pi===-1)return null;const all=splitAllArgs(s,pi+1);if(!all||all.length<3)return null;if(all[0].trim().toUpperCase()!=='TRUE')return null;const results=[];let i=1;while(i+1<all.length){const cond=all[i].trim();const val=all[i+1].trim();results.push({condition:cleanCriteria(cond),result:val.replace(/^'+|'+$/g,'').trim()||val});i+=2;}if(i<all.length){const def=all[i].trim().replace(/^'+|'+$/g,'');if(def&&def.toUpperCase()!=='NULL')results.push({condition:'DEFAULT',result:def,isDefault:true});}return results.length?results:null;}
+
+function splitAllArgs(str,si){const args=[];let d=0,inS=false,cur='';for(let i=si;i<str.length;i++){const ch=str[i];if(inS){if(ch==="'"&&str[i+1]==="'"){cur+="''";i++;continue;}if(ch==="'")inS=false;cur+=ch;continue;}if(ch==="'"){inS=true;cur+=ch;continue;}if(ch==='('){d++;cur+=ch;continue;}if(ch===')'){if(d===0){args.push(cur);break;}d--;cur+=ch;continue;}if(ch===','&&d===0){args.push(cur);cur='';continue;}cur+=ch;}return args;}
+
+function buildDecodeHtml(pd){let h='<table class="decode-table">';pd.forEach(r=>{h+=`<tr><td class="decode-cond" style="${r.isDefault?'color:#666;font-style:italic':''}">${escHtml(r.condition)}</td><td class="decode-result" style="${r.isDefault?'color:#94a3b8':''}">→ ${escHtml(r.result)}</td></tr>`;});return h+'</table>';}
+
+function categorize(txName,fn){const s=(txName+' '+fn).toLowerCase();if(s.includes('nonaddress')||s.includes('non_address'))return{type:'nonaddress',label:'Non-Address'};if(s.includes('address')||s.includes('street')||s.includes('postal')||s.includes('census'))return{type:'address',label:'Address'};if(s.includes('email'))return{type:'cleanse',label:'Email'};if(s.includes('phone')||s.includes('area_code'))return{type:'cleanse',label:'Phone'};if(s.includes('vin'))return{type:'cleanse',label:'VIN'};if(s.includes('business_name')||s.includes('busniess')||s.includes('company'))return{type:'cleanse',label:'Business Name'};if(s.includes('fullname')||s.includes('full_name')||s.includes('firstname')||s.includes('first_name')||s.includes('surname')||s.includes('last_name')||s.includes('name')||s.includes('gender')||s.includes('salutation'))return{type:'cleanse',label:'Name'};if(s.includes('window_key')||s.includes('winkey')||s.includes('win_key'))return{type:'logic',label:'Window Key'};if(s.includes('finalpriority')||s.includes('score')||s.includes('pattern'))return{type:'scoring',label:'Scoring'};if(s.includes('status')||s.includes('error')||s.includes('passthrough'))return{type:'logic',label:'Status / Config'};if(s.includes('consolidate')||s.includes('outcolumn')||s.includes('routing')||s.includes('generate'))return{type:'logic',label:'Output Generation'};if(s.includes('filter')||s.includes('validpair'))return{type:'filter',label:'Filter'};return{type:'logic',label:txName||'Expression'};}
+
+function priorityClass(v){const n=parseFloat(v);if(isNaN(n))return'none';if(n>=1700||(n>0&&n<100&&n>=50))return'high';if(n>=1000||(n>0&&n<100&&n>=25))return'mid';return'low';}
+
+function cleanCriteria(c){if(!c)return'';return c.replace(/LTRIM\(RTRIM\(([^)]+)\)\)/g,'$1').replace(/LTRIM\(RTRIM\(/g,'').replace(/^\s*--[^\n\r]*[\n\r]+/gm,'').replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim().substring(0,500);}
+
+function summariseExpr(fn,expr){const lo=expr.toLowerCase();const ops=[];if(lo.includes('reg_match')||lo.includes('reg_replace'))ops.push('Regex');if(lo.includes('length('))ops.push('Length');if(lo.includes('instr('))ops.push('String search');if(lo.includes('substr('))ops.push('Substring');if(lo.includes('ltrim')||lo.includes('rtrim'))ops.push('Trim');if(lo.includes('upper(')||lo.includes('lower('))ops.push('Case');if(lo.includes('replacechr')||lo.includes('replace('))ops.push('Replace');if(lo.includes('iif'))ops.push('IIF');if(lo.includes('is_number')||lo.includes('isnull'))ops.push('Null check');const tag=ops.length?ops.join(' · '):'Expression';return`[${tag}]\n`+expr.trim().replace(/\r\n/g,' ').replace(/\n/g,' ').substring(0,200);}
+
+// ─────────────────────────────────────────────
+// RENDER RESULTS
+// ─────────────────────────────────────────────
+function renderResults(file,{rules,xmlType,mappingName}){
+  setStep('done',100);
+  document.getElementById('processingSection').style.display='none';
+  document.getElementById('resultsSection').style.display='block';
+  document.getElementById('specBtn').disabled=false;
+
+  const typeLabels={match:'Match Rule',cleanse:'Cleanse / Stdz',service:'Service Rule',complex:'Cleanse Service',generic:'IDQ Mapping'};
+  const typeBadges={match:'xml-type-match',cleanse:'xml-type-cleanse',service:'xml-type-service',complex:'xml-type-complex',generic:'xml-type-generic'};
+  const kb=(file.size/1024).toFixed(1);
+  document.getElementById('fileInfo').innerHTML=`<div class="file-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="file-name">${file.name} <span class="xml-type-badge ${typeBadges[xmlType]||'xml-type-generic'}">${typeLabels[xmlType]||'IDQ Mapping'}</span></div><div class="file-meta">${mappingName} · ${kb} KB · ${rules.length} items extracted</div></div><button class="reset-btn" onclick="resetApp()">↩ New file</button>`;
+
+  const matchRules=rules.filter(r=>['address','nonaddress','scoring'].includes(r.type));
+  const logicRules=rules.filter(r=>r.type==='logic');
+  const filterRules=rules.filter(r=>r.type==='filter');
+  const cleanseRules=rules.filter(r=>r.type==='cleanse');
+  const specialRules=rules.filter(r=>['special','lookup','mapplet'].includes(r.type));
+  document.getElementById('statsRow').innerHTML=`<div class="stat-card"><div class="stat-label">Total</div><div class="stat-val green">${rules.length}</div></div><div class="stat-card"><div class="stat-label">Match Rules</div><div class="stat-val blue">${matchRules.length}</div></div><div class="stat-card"><div class="stat-label">Cleanse Logic</div><div class="stat-val purple">${cleanseRules.length}</div></div><div class="stat-card"><div class="stat-label">Expressions</div><div class="stat-val amber">${logicRules.length}</div></div><div class="stat-card"><div class="stat-label">Filters</div><div class="stat-val teal">${filterRules.length}</div></div><div class="stat-card"><div class="stat-label">Special TX</div><div class="stat-val rose">${specialRules.length}</div></div>`;
+
+  const txNames=[...new Set(rules.map(r=>r.txName).filter(Boolean))].sort();
+  const sel=document.getElementById('txFilter');
+  txNames.forEach(n=>{const o=document.createElement('option');o.value=n;o.textContent=n;sel.appendChild(o);});
+
+  activeTabs=[{id:'all',label:'All',rules}];
+  const push=(id,label,filter)=>{const s=rules.filter(filter);if(s.length)activeTabs.push({id,label,rules:s});};
+  push('match','Match Rules',r=>['address','nonaddress','scoring'].includes(r.type));
+  push('cleanse','Cleanse / Name',r=>r.type==='cleanse');
+  push('logic','Expressions',r=>r.type==='logic');
+  push('filter','Filters',r=>r.type==='filter');
+  push('special','Token / Label / Parser',r=>r.type==='special');
+  push('lookup','Lookups',r=>r.type==='lookup');
+  push('mapplet','Sub-Mapplets',r=>r.type==='mapplet');
+
+  document.getElementById('tabsRow').innerHTML=activeTabs.map((t,i)=>`<button class="tab${i===0?' active':''}" onclick="showTab('${t.id}')">${t.label} <span style="font-size:10px;opacity:0.55">(${t.rules.length})</span></button>`).join('');
+  const panels=document.getElementById('tabPanels');panels.innerHTML='';
+  activeTabs.forEach((t,i)=>{const div=document.createElement('div');div.id='tab-'+t.id;div.className='tab-panel'+(i===0?' active':'');panels.appendChild(div);buildTable('tab-'+t.id,t.rules);});
+}
+
+// ─────────────────────────────────────────────
+// TABLE
+// ─────────────────────────────────────────────
+const BADGE_MAP={address:'badge-addr',nonaddress:'badge-noaddr',filter:'badge-filter',logic:'badge-logic',scoring:'badge-scoring',cleanse:'badge-cleanse',special:'badge-special',mapplet:'badge-mapplet',lookup:'badge-lookup'};
+
+function buildTable(elId,rows){
+  const el=document.getElementById(elId);
+  if(!rows.length){el.innerHTML='<div class="empty-state">No items in this category</div>';return;}
+  const groups={};rows.forEach(r=>{const k=r.txName||'Unknown';if(!groups[k])groups[k]=[];groups[k].push(r);});
+  let html='';
+  for(const[txName,gRows]of Object.entries(groups)){
+    const bc=BADGE_MAP[gRows[0]?.type]||'badge-logic';
+    const fc=gRows[0]?.category||'';
+    const gid='grp_'+txName.replace(/[^a-z0-9]/gi,'_')+'_'+elId;
+    html+=`<div class="table-card"><div class="group-head" onclick="toggleGroup('${gid}')"><span class="badge ${bc}">${fc}</span><span style="color:var(--text2);font-size:11px;margin-left:4px">${escHtml(txName)}</span><span style="color:var(--text3);font-size:10px;margin-left:4px">(${gRows.length})</span><span class="chevron">▾</span></div><div class="group-body" id="${gid}"><div class="table-wrap"><table><thead><tr><th style="width:100px">Code</th><th style="width:160px">Rule / Field</th><th style="width:90px">Type</th><th>Logic / Criteria</th></tr></thead><tbody>`;
+    gRows.forEach(r=>{
+      const pCls=`prio ${r.priorityClass||'none'}`;
+      const pDisp=(!r.priority||r.priority==='—')?`<span style="color:var(--text3)">—</span>`:`<span class="${pCls}">${r.priority}</span>`;
+      const etag=r.exprType==='decode'?'<span style="color:var(--accent);font-size:9px;font-family:DM Mono">DECODE</span>':r.exprType==='iif'?'<span style="color:var(--blue);font-size:9px;font-family:DM Mono">IIF</span>':r.exprType==='filter'?'<span style="color:var(--amber);font-size:9px;font-family:DM Mono">FILTER</span>':r.exprType==='tokenStd'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">STD</span>':r.exprType==='labeler'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">LABEL</span>':r.exprType==='parser'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">PARSE</span>':r.exprType==='lookup'?'<span style="color:var(--orange);font-size:9px;font-family:DM Mono">LKP</span>':r.exprType==='mapplet'?'<span style="color:var(--rose);font-size:9px;font-family:DM Mono">MPLT</span>':'<span style="color:var(--text3);font-size:9px;font-family:DM Mono">EXPR</span>';
+      const cc=r.criteriaHtml?r.criteriaHtml:`<div class="criteria-text">${formatCriteria(r.criteria||'')}</div>`;
+      html+=`<tr class="data-row" data-search="${escAttr((r.ruleName+' '+r.txName+' '+r.criteria+' '+r.category).toLowerCase())}"><td>${pDisp}</td><td style="font-weight:500;font-size:12px">${escHtml(r.ruleName||'')}</td><td>${etag}</td><td>${cc}</td></tr>`;
+    });
+    html+='</tbody></table></div></div></div>';
+  }
+  el.innerHTML=html;
+}
+
+function toggleGroup(id){const b=document.getElementById(id);const h=b?b.previousElementSibling:null;if(!b)return;const c=b.classList.toggle('collapsed');if(h)h.classList.toggle('collapsed',c);}
+
+function applySearch(){
+  const q=(document.getElementById('searchBox').value||'').toLowerCase().trim();
+  const tx=(document.getElementById('txFilter').value||'').toLowerCase();
+  document.querySelectorAll('.data-row').forEach(row=>{const ds=(row.getAttribute('data-search')||'');row.classList.toggle('hidden-row',!((!q||ds.includes(q))&&(!tx||ds.includes(tx))));});
+  document.querySelectorAll('.table-card').forEach(card=>{card.style.display=Array.from(card.querySelectorAll('.data-row')).some(r=>!r.classList.contains('hidden-row'))?'':'none';});
+}
+
+function showTab(id){document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',activeTabs[i]?.id===id));document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='tab-'+id));applySearch();}
+
+function formatCriteria(c){if(!c)return'<span style="color:var(--text3)">—</span>';return escHtml(c).replace(/\bAND\b/g,'<strong style="color:var(--accent);font-size:10px">AND</strong>').replace(/\bOR\b/g,'<strong style="color:var(--blue);font-size:10px">OR</strong>').replace(/\bNOT\b/g,'<strong style="color:var(--coral);font-size:10px">NOT</strong>').replace(/\n/g,'<br>');}
+
+function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');}
+function escAttr(s){return String(s).replace(/"/g,'&quot;');}
+
+function resetApp(){
+  parsedRules=[];activeTabs=[];currentMappingName='';currentXmlType='';
+  document.getElementById('uploadSection').style.display='block';
+  document.getElementById('resultsSection').style.display='none';
+  document.getElementById('errorBox').style.display='none';
+  document.getElementById('fileInput').value='';
+  document.getElementById('txFilter').innerHTML='<option value="">All transformations</option>';
+  document.getElementById('specBtn').disabled=true;
+  closeSpec();
+}
+
+function exportCSV(){const h=['Priority','Type','ExprType','Category','Transformation','Rule/Field','Criteria'];const r=parsedRules.map(r=>[r.priority,r.type,r.exprType||'',r.category,r.txName,r.ruleName,(r.criteria||'').replace(/\n/g,' ').replace(/,/g,';')]);const csv=[h,...r].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');dl('idq_rules.csv',csv,'text/csv');}
+function exportJSON(){dl('idq_rules.json',JSON.stringify(parsedRules,null,2),'application/json');}
+function dl(name,content,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();}
+
+// ═══════════════════════════════════════════════════════════════
+// SPEC GENERATION
+// ═══════════════════════════════════════════════════════════════
+
+function openSpec(){
+  document.getElementById('specOverlay').classList.add('open');
+  document.getElementById('specHeaderSub').textContent=currentMappingName;
+  if(!specData) generateSpec();
+}
+
+function closeSpec(){document.getElementById('specOverlay').classList.remove('open');}
+
+// Click outside to close
+document.getElementById('specOverlay').addEventListener('click',e=>{if(e.target===document.getElementById('specOverlay'))closeSpec();});
+
+function setSpecStep(t){document.getElementById('specGenStep').textContent=t;}
+
+function buildSpecContext(){
+  const domains=new Set(), subMapplets=new Set(), tokenStds=new Set();
+  const labelers=new Set(), parsers=new Set(), lookups=[];
+  const filterConditions=[], errorFields=new Set();
+  const matchRules=[], allTxNames=new Set();
+
+  parsedRules.forEach(r=>{
+    allTxNames.add(r.txName);
+    const s=(r.txName+' '+r.ruleName+' '+r.category).toLowerCase();
+    if(s.includes('address'))domains.add('Address Cleansing');
+    if(s.includes('email'))domains.add('Email Validation');
+    if(s.includes('phone'))domains.add('Phone Cleansing');
+    if(s.includes('name')&&!s.includes('service'))domains.add('Name Standardisation');
+    if(s.includes('business')||s.includes('company'))domains.add('Business Name Standardisation');
+    if(s.includes('window_key')||s.includes('winkey'))domains.add('Window Key Generation');
+    if(s.includes('webkey')||s.includes('verify_web'))domains.add('WebKey Validation');
+    if(s.includes('vin'))domains.add('VIN Matching');
+    if(s.includes('gender'))domains.add('Gender Assignment');
+    if(r.type==='mapplet')subMapplets.add(r.ruleName);
+    if(r.category==='Token Standardiser')tokenStds.add(r.txName);
+    if(r.category==='Labeler')labelers.add(r.txName);
+    if(r.category==='Parser')parsers.add(r.txName);
+    if(r.type==='lookup')lookups.push({name:r.txName,criteria:r.criteria});
+    if(r.type==='filter')filterConditions.push(r.criteria);
+    if(r.ruleName.toLowerCase().includes('error')||r.ruleName.toLowerCase().includes('status'))errorFields.add(r.ruleName);
+    if(['address','nonaddress'].includes(r.type)&&r.priority!=='—')matchRules.push({name:r.ruleName,priority:r.priority,category:r.category});
+  });
+
+  return{
+    mappingName:currentMappingName, xmlType:currentXmlType, fileName:currentFileName,
+    domains:[...domains], subMapplets:[...subMapplets], tokenStds:[...tokenStds],
+    labelers:[...labelers], parsers:[...parsers], lookups, filterConditions:filterConditions.slice(0,5),
+    errorFields:[...errorFields], matchRules:matchRules.slice(0,10), allTxNames:[...allTxNames],
+    stats:{total:parsedRules.length, match:parsedRules.filter(r=>['address','nonaddress'].includes(r.type)).length,
+      cleanse:parsedRules.filter(r=>r.type==='cleanse').length, logic:parsedRules.filter(r=>r.type==='logic').length,
+      filter:parsedRules.filter(r=>r.type==='filter').length, special:parsedRules.filter(r=>['special','lookup','mapplet'].includes(r.type)).length}
+  };
+}
+
+async function generateSpec(){
+  document.getElementById('specRegenBtn').disabled=true;
+  specData=null;
+  document.getElementById('specBody').innerHTML=`<div class="spec-generating"><div class="sp"></div><p>Analysing mapping and generating specification…</p><p class="sub" id="specGenStep">Extracting context from parsed rules</p></div>`;
+
+  try{
+    setSpecStep('Building context…');
+    const ctx=buildSpecContext();
+
+    setSpecStep('Calling AI to generate business narrative…');
+    const narrative=await callClaudeForNarrative(ctx);
+
+    setSpecStep('Assembling document…');
+    specData={ctx,narrative};
+    const html=renderSpecHtml(ctx,narrative);
+    document.getElementById('specBody').innerHTML=html;
+  }catch(err){
+    document.getElementById('specBody').innerHTML=`<div class="spec-error"><p>⚠ Spec generation encountered an issue: ${escHtml(err.message)}</p><p style="margin-top:12px;font-size:12px;color:#64748b">Falling back to template-based spec…</p></div>`;
+    setTimeout(()=>{try{const ctx=buildSpecContext();const html=renderSpecHtml(ctx,null);document.getElementById('specBody').innerHTML=html;specData={ctx,narrative:null};}catch(e2){}},1200);
+  }finally{
+    document.getElementById('specRegenBtn').disabled=false;
+  }
+}
+
+async function callClaudeForNarrative(ctx){
+  const prompt=`You are a senior Business Analyst writing a Technical Specification for an Informatica IDQ mapping.
+
+MAPPING CONTEXT (extracted from the IDQ XML):
+Mapping Name: ${ctx.mappingName}
+File: ${ctx.fileName}
+Type: ${ctx.xmlType}
+Data Domains Covered: ${ctx.domains.join(', ') || 'General data quality'}
+Sub-Rules / Mapplets Referenced: ${ctx.subMapplets.slice(0,15).join(', ') || 'None'}
+Token Standardisers: ${ctx.tokenStds.slice(0,6).join(', ') || 'None'}
+Labelers: ${ctx.labelers.join(', ') || 'None'}
+Parsers: ${ctx.parsers.join(', ') || 'None'}
+Lookup Tables: ${ctx.lookups.map(l=>l.name).join(', ') || 'None'}
+Total Transformations: ${ctx.stats.total}
+Match Rules: ${ctx.stats.match}, Cleanse Logic: ${ctx.stats.cleanse}, Filters: ${ctx.stats.filter}, Special TX: ${ctx.stats.special}
+
+Write a professional Technical Specification. Return ONLY valid JSON — no preamble, no markdown, no backticks:
+{
+  "title": "human-readable project title (3-6 words)",
+  "businessObjective": "2-3 sentences describing the purpose of this mapping",
+  "businessProblems": ["problem 1","problem 2","problem 3","problem 4"],
+  "businessGoals": ["goal 1","goal 2","goal 3","goal 4","goal 5"],
+  "scopeIncluded": ["included item based on what domains/rules exist"],
+  "scopeExcluded": ["item not covered by this mapping"],
+  "functionalRequirements": [
+    {"id":"BR-001","title":"requirement name","description":"what the system does","expectedResult":"what the output should be","errorHandling":"how errors are handled"}
+  ],
+  "dataQualityRequirements": ["req 1","req 2","req 3"],
+  "errorHandlingRequirements": ["req 1","req 2","req 3"],
+  "successCriteria": ["criteria 1","criteria 2","criteria 3"],
+  "businessBenefits": ["benefit 1","benefit 2","benefit 3","benefit 4"],
+  "assumptions": ["assumption 1","assumption 2","assumption 3"]
+}
+
+Generate one functional requirement per major domain. Be specific to what this mapping actually does. Return ONLY the JSON object.`;
+
+  const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
+  const data=await resp.json();
+  const text=(data.content||[]).map(c=>c.text||'').join('');
+  const m=text.match(/\{[\s\S]+\}/);
+  if(!m)throw new Error('Could not parse AI response');
+  return JSON.parse(m[0]);
+}
+
+function renderSpecHtml(ctx,n){
+  const today=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+  const title=n?.title||humaniseName(ctx.mappingName);
+  const txTypeLabel={match:'Match Rule',cleanse:'Cleanse / Standardisation',service:'Service Rule',complex:'Cleanse Service Orchestration',generic:'IDQ Mapping'};
+
+  const li=arr=>(arr||[]).map(x=>`<li>${escHtml(x)}</li>`).join('');
+  const req=(r,i)=>`<h3>${escHtml(r.title||'Requirement '+(i+1))} <span style="color:#94a3b8;font-weight:400">${escHtml(r.id||'BR-00'+(i+1))}</span></h3>
+    <div class="req-box"><table>
+      <tr><td>Requirement ID</td><td>${escHtml(r.id||'BR-00'+(i+1))}</td></tr>
+      <tr><td>Description</td><td>${escHtml(r.description||'')}</td></tr>
+      <tr><td>Expected Result</td><td>${escHtml(r.expectedResult||'')}</td></tr>
+      ${r.errorHandling?`<tr><td>Error Handling</td><td>${escHtml(r.errorHandling)}</td></tr>`:''}
+    </table></div>`;
+
+  // Transformation inventory table
+  const txGroups={};
+  parsedRules.forEach(r=>{if(!txGroups[r.txName])txGroups[r.txName]={type:r.category,items:0,exprTypes:new Set()};txGroups[r.txName].items++;txGroups[r.txName].exprTypes.add(r.exprType||r.type);});
+  const txRows=Object.entries(txGroups).map(([name,info])=>`<tr><td>${escHtml(name)}</td><td>${escHtml(info.type)}</td><td>${info.items}</td><td>${escHtml([...info.exprTypes].join(', '))}</td></tr>`).join('');
+
+  // Top match rules
+  const matchRows=ctx.matchRules.length?ctx.matchRules.map(r=>`<tr><td>${escHtml(r.name)}</td><td>${escHtml(r.category)}</td><td>${escHtml(r.priority)}</td></tr>`).join(''):'<tr><td colspan="3" style="color:#94a3b8;font-style:italic">No priority-ranked match rules in this mapping</td></tr>';
+
+  return`<div class="cover">
+    <h1>${escHtml(title)}</h1>
+    <div class="meta">Technical Specification Document &nbsp;·&nbsp; Generated ${today}</div>
+    <div style="margin-top:12px">${ctx.domains.map(d=>`<span class="tag">${escHtml(d)}</span>`).join('')}</div>
+    <div style="margin-top:8px;color:#64748b;font-size:11px">${escHtml(ctx.mappingName)} &nbsp;·&nbsp; ${escHtml(txTypeLabel[ctx.xmlType]||'IDQ Mapping')} &nbsp;·&nbsp; ${ctx.stats.total} transformations extracted</div>
+  </div>
+
+  <h2><span class="section-num">1.</span> Business Objective</h2>
+  <p>${escHtml(n?.businessObjective||'This mapping implements data quality processing for the '+ctx.domains.join(', ')+' domain(s), ensuring data is cleansed, validated, and standardised before downstream consumption.')}</p>
+
+  <h2><span class="section-num">2.</span> Business Problems Addressed</h2>
+  <ul>${li(n?.businessProblems||ctx.domains.map(d=>`Inconsistent or invalid ${d} data`))}</ul>
+
+  <h2><span class="section-num">3.</span> Business Goals</h2>
+  <ul>${li(n?.businessGoals||ctx.domains.map(d=>`Standardise and validate ${d} data`))}</ul>
+
+  <h2><span class="section-num">4.</span> Scope</h2>
+  <h3>Included</h3>
+  <ul>${li(n?.scopeIncluded||ctx.domains)}</ul>
+  <h3>Excluded</h3>
+  <ul>${li(n?.scopeExcluded||['Items not reflected in this mapping'])}</ul>
+
+  <h2><span class="section-num">5.</span> Functional Requirements</h2>
+  ${(n?.functionalRequirements||ctx.domains.map((d,i)=>({id:'BR-00'+(i+1),title:d,description:`System shall process ${d}`,expectedResult:`${d} is standardised`,errorHandling:'Invalid records flagged'}))).map((r,i)=>req(r,i)).join('')}
+
+  <h2><span class="section-num">6.</span> Transformation Inventory</h2>
+  <table><thead><tr><th>Transformation Name</th><th>Category</th><th>Items</th><th>Expression Types</th></tr></thead><tbody>${txRows}</tbody></table>
+
+  <h2><span class="section-num">7.</span> Sub-Rules Referenced</h2>
+  ${ctx.subMapplets.length?`<ul>${ctx.subMapplets.map(m=>`<li><code>${escHtml(m)}</code></li>`).join('')}</ul>`:'<p style="color:#94a3b8">No sub-mapplet references found.</p>'}
+
+  <h2><span class="section-num">8.</span> Match Rule Catalogue</h2>
+  <table><thead><tr><th>Rule Name</th><th>Category</th><th>Priority Code</th></tr></thead><tbody>${matchRows}</tbody></table>
+
+  ${ctx.lookups.length?`<h2><span class="section-num">9.</span> Reference Data / Lookups</h2><ul>${ctx.lookups.map(l=>`<li><strong>${escHtml(l.name)}</strong> — ${escHtml(l.criteria.substring(0,120))}</li>`).join('')}</ul>`:''}
+
+  <h2><span class="section-num">${ctx.lookups.length?10:9}.</span> Data Quality Requirements</h2>
+  <ul>${li(n?.dataQualityRequirements||['Remove leading and trailing whitespace','Standardise capitalisation','Validate mandatory fields','Handle null values consistently','Apply consistent format across output fields'])}</ul>
+
+  <h2><span class="section-num">${ctx.lookups.length?11:10}.</span> Error Handling Requirements</h2>
+  <ul>${li(n?.errorHandlingRequirements||['Invalid records must be identified and flagged','Error codes and messages must be generated for invalid inputs','Invalid records must not proceed to downstream processing'])}</ul>
+  ${ctx.filterConditions.length?`<h3>Filter Logic Found</h3><ul>${ctx.filterConditions.map(f=>`<li><code style="font-size:11px">${escHtml(f.substring(0,120))}</code></li>`).join('')}</ul>`:''}
+
+  <h2><span class="section-num">${ctx.lookups.length?12:11}.</span> Success Criteria</h2>
+  <ul>${li(n?.successCriteria||['Data is processed consistently and accurately','Invalid records are flagged without blocking valid records','Downstream systems receive standardised output'])}</ul>
+
+  <h2><span class="section-num">${ctx.lookups.length?13:12}.</span> Business Benefits</h2>
+  <ul>${li(n?.businessBenefits||['Improved data quality across the organisation','Reduced manual data cleansing effort','Improved downstream reporting accuracy'])}</ul>
+
+  <h2><span class="section-num">${ctx.lookups.length?14:13}.</span> Assumptions</h2>
+  <ul>${li(n?.assumptions||['Source system provides data in the expected format','Informatica IDQ standardisation libraries are configured and available','Downstream systems are capable of consuming cleansed output'])}</ul>`;
+}
+
+function humaniseName(n){return n.replace(/^(mplt_|rule_)/i,'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+
+// ─────────────────────────────────────────────
+// SPEC DOWNLOADS
+// ─────────────────────────────────────────────
+function specToPlainText(){
+  const body=document.getElementById('specBody');if(!body)return'';
+  // Walk the rendered HTML and extract text intelligently
+  function walk(el,indent){
+    let out='';const tag=el.tagName?.toLowerCase()||'';
+    if(tag==='h1')out+='\n\n'+el.textContent.toUpperCase()+'\n'+'='.repeat(Math.min(el.textContent.length,60))+'\n';
+    else if(tag==='h2')out+='\n\n'+el.textContent+'\n'+'-'.repeat(Math.min(el.textContent.length,50))+'\n';
+    else if(tag==='h3')out+='\n'+el.textContent+'\n';
+    else if(tag==='li')out+='\n  • '+el.textContent;
+    else if(tag==='tr'){const cells=Array.from(el.querySelectorAll('td,th'));if(cells.length)out+='\n  '+cells.map(c=>c.textContent.trim().padEnd(28)).join(' | ');}
+    else if(tag==='p')out+='\n'+el.textContent;
+    else if(el.children&&el.children.length){for(const c of el.children)out+=walk(c,indent+'  ');}
+    else if(tag!=='table'&&tag!=='tbody'&&tag!=='thead')out+=el.textContent||'';
+    return out;
+  }
+  return walk(body,'').replace(/\n{4,}/g,'\n\n').trim();
+}
+
+function downloadSpecTxt(){
+  if(!specData){alert('Generate the spec first.');return;}
+  const txt=specToPlainText();
+  dl((currentMappingName||'spec').replace(/\s+/g,'_')+'.txt',txt,'text/plain');
+}
+
+function downloadSpecWord(){
+  if(!specData){alert('Generate the spec first.');return;}
+  const body=document.getElementById('specBody').innerHTML;
+  const today=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
+  const wordHtml=`<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+<head><meta charset='utf-8'><title>${escHtml(currentMappingName)} — Technical Specification</title>
+<!--[if gte mso 9]><xml><w:WordDocument><w:View>Print</w:View><w:Zoom>90</w:Zoom><w:DoNotOptimizeForBrowser/></w:WordDocument></xml><![endif]-->
+<style>
+  @page{size:A4;margin:2.5cm 2cm;}
+  body{font-family:Calibri,sans-serif;font-size:11pt;color:#1a1a2e;line-height:1.6;}
+  h1{font-size:20pt;color:#1F3864;border-bottom:2pt solid #1F3864;padding-bottom:6pt;margin-top:0;}
+  h2{font-size:14pt;color:#2E75B6;margin-top:20pt;margin-bottom:6pt;border-bottom:1pt solid #BDD7EE;padding-bottom:3pt;}
+  h3{font-size:11pt;font-weight:bold;color:#404040;margin-top:12pt;margin-bottom:4pt;}
+  p{margin:6pt 0;}
+  ul,ol{margin:4pt 0;padding-left:18pt;}
+  li{margin:3pt 0;}
+  table{border-collapse:collapse;width:100%;margin:8pt 0;}
+  th{background:#2E75B6;color:#fff;padding:6pt 8pt;text-align:left;font-size:10pt;font-weight:600;}
+  td{padding:5pt 8pt;border:1pt solid #BDD7EE;font-size:10pt;vertical-align:top;}
+  tr:nth-child(even) td{background:#EEF4FB;}
+  .req-box table td:first-child{background:#F0F4F9;font-weight:bold;color:#1F3864;width:30%;}
+  .cover{text-align:center;padding:40pt 0 30pt;}
+  .cover h1{border:none;font-size:24pt;}
+  .cover .meta{color:#64748b;font-size:10pt;}
+  .tag{background:#E0EFFF;color:#1e40af;font-size:9pt;padding:1pt 5pt;border-radius:2pt;margin:1pt;}
+  .section-num{color:#94a3b8;}
+  code{font-family:'Courier New',monospace;font-size:9pt;background:#f5f5f5;padding:1pt 3pt;}
+  .spec-generating,.spec-error{display:none;}
+</style></head>
+<body>
+<p style="color:#94a3b8;font-size:9pt;margin-bottom:20pt">Generated by IDQ Rule Parser &nbsp;|&nbsp; ${today} &nbsp;|&nbsp; ${escHtml(currentFileName)}</p>
+${body}
+</body></html>`;
+  dl((currentMappingName||'spec').replace(/\s+/g,'_')+'_TechSpec.doc',wordHtml,'application/msword');
+}
+</script>
+</body>
+</html>
