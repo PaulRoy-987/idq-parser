@@ -109,6 +109,11 @@
   .badge-special{background:var(--sky-dim);color:var(--sky);border:1px solid #0a2535;}
   .badge-mapplet{background:var(--rose-dim);color:var(--rose);border:1px solid #3a1025;}
   .badge-lookup{background:var(--orange-dim);color:var(--orange);border:1px solid #3a2008;}
+  .badge-strdist{background:#1a1028;color:#e879f9;border:1px solid #3a1050;}
+  .badge-joiner{background:#0a1a28;color:#67e8f9;border:1px solid #0a3045;}
+  .badge-rank{background:#1a280a;color:#a3e635;border:1px solid #2a4010;}
+  .badge-normalizer{background:#1a200a;color:#d4d47a;border:1px solid #363610;}
+  .badge-cred{background:#1a1428;color:#c4b5fd;border:1px solid #352850;}
 
   .prio{font-family:'DM Mono',monospace;font-size:11px;font-weight:500;}
   .prio.high{color:var(--accent);} .prio.mid{color:var(--blue);}
@@ -195,11 +200,11 @@
 <div class="main">
   <div id="uploadSection">
     <div class="upload-zone" id="dropZone">
-      <input type="file" id="fileInput" accept=".xml,.imx">
+      <input type="file" id="fileInput" accept=".xml,.imx,.dic">
       <div class="upload-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1M12 12V4M8 8l4-4 4 4"/></svg></div>
-      <div class="upload-title">Drop your IMX / XML file here</div>
-      <div class="upload-sub">Match rules · Cleanse mapplets · Service rules · Complex orchestration mapplets</div>
-      <div class="upload-badge">.xml · .imx · Any IDQ IMX export</div>
+      <div class="upload-title">Drop your IDQ file here</div>
+      <div class="upload-sub">Match rules · Cleanse mapplets · Service rules · Complex orchestration mapplets · Credential dictionaries</div>
+      <div class="upload-badge">.xml · .imx · .dic · Any IDQ export</div>
     </div>
     <div class="error-box" id="errorBox"></div>
   </div>
@@ -301,6 +306,21 @@ function processFile(file){
   document.getElementById('processingSection').style.display='block';
   document.getElementById('resultsSection').style.display='none';
   document.getElementById('procBar').style.width='0%';
+
+  // Route .dic files separately
+  if(file.name.toLowerCase().endsWith('.dic')){
+    const reader=new FileReader();
+    reader.onload=e=>{
+      try{
+        setStep('parsing credential dictionary…',40);
+        const dicData=parseDIC(e.target.result, file.name);
+        setTimeout(()=>renderDICResults(file,dicData),200);
+      }catch(err){document.getElementById('uploadSection').style.display='block';showError(err.message);}
+    };
+    reader.readAsText(file);
+    return;
+  }
+
   const reader=new FileReader();
   reader.onload=e=>{
     try{
@@ -325,8 +345,239 @@ function processFile(file){
 }
 
 // ─────────────────────────────────────────────
-// DECODE
+// DIC FILE PARSER  (handles all IDQ DIC types)
 // ─────────────────────────────────────────────
+function parseDIC(text, fileName) {
+  // ── Parse CSV rows ──────────────────────────────────────────────────────
+  const rows = text.trim().split('\n').map(line => {
+    const cols = []; let cur='', inQ=false;
+    for(let i=0;i<line.length;i++){
+      const ch=line[i];
+      if(ch==='"'){inQ=!inQ;continue;}
+      if(ch===','&&!inQ){cols.push(cur.trim());cur='';continue;}
+      cur+=ch;
+    }
+    cols.push(cur.trim());
+    return cols;
+  }).filter(r=>r.length>=1&&r[0].trim());
+
+  if(!rows.length) throw new Error('DIC file appears to be empty.');
+
+  const maxCols  = Math.max(...rows.map(r=>r.length));
+  const fname    = fileName.toLowerCase().replace(/\.dic$/,'').replace(/.*\//,'');
+  const row0     = rows[0] || [];
+  const col1s    = rows.slice(0,10).map(r=>r[0]||'').filter(Boolean);
+
+  // ── Detect DIC type ─────────────────────────────────────────────────────
+  const isCredentials  = row0.length>=2 && row0.slice(1).some(c=>c.includes('IDQ_DIS_'));
+  const isGenderLookup = col1s.length>=3 && col1s.every(c=>['M','F','U','N','m','f'].includes(c.trim()));
+  const isNumericKey   = col1s.length>=3 && col1s.every(c=>c.trim().replace(/"/g,'').match(/^\d{2,6}$/));
+  const dicType = isCredentials?'credentials':isGenderLookup?'gender':isNumericKey?'numeric':'reference';
+
+  // ── Infer purpose from filename ─────────────────────────────────────────
+  const purposeMap = {
+    'ws_creds':                  'Web Service Credentials — authorised AppID/WebKey values',
+    'can_provinces_infa':        'Canadian province/territory reference table',
+    'household_infa':            'Household salutation terms for name standardisation',
+    'ref_roman_numbers':         'Roman numeral equivalents (I=1st, II=2nd…)',
+    'usa_business_word_infa':    'Business keyword standardisation dictionary',
+    'usa_cc_name_exceptions':    'Name exception pairs (surname + first name)',
+    'usa_census_tract_info':     'US Census tract / ZIP code reference data',
+    'usa_company_acronyms_infa': 'Company acronym expansions',
+    'usa_company_names_std_infa':'Company name standardisation table',
+    'usa_company_sufx_abrv_infa':'Company suffix abbreviation mappings',
+    'usa_connectors_infa':       'Name connector words (and, or, &)',
+    'usa_firstnames_infa':       'US first name reference dictionary',
+    'usa_gender_infa':           'Gender classification by name',
+    'usa_name_designator_infa':  'Name designator terms (ATTN, FAO, C/O)',
+    'usa_name_prefix_infa':      'Name prefix/title standardisation',
+    'usa_name_suffix_infa':      'Name suffix standardisation',
+    'usa_nicknames_infa':        'Nickname to formal name equivalents',
+    'usa_occupation_infa':       'Occupation/title reference terms',
+    'usa_prename_gender_infa':   'Gender assignment by prenominal title',
+    'usa_surname_ind_infa':      'Surname indicators (AL, BIN, VAN…)',
+    'usa_surnames_infa':         'US surname reference dictionary',
+    'usa_valid_name_frmts_infa': 'Valid name format pattern library',
+  };
+  const purpose = purposeMap[fname] || `${fname.replace(/_infa$/,'').replace(/_/g,' ')} reference table`;
+
+  // ── Column headers by type ──────────────────────────────────────────────
+  const headers = isCredentials ? ['Service / AppID Code','DIS Node Endpoint','Queue Credential','Port Credential']
+    : isGenderLookup            ? ['Gender Code','Name / Title']
+    : isNumericKey              ? Array.from({length:maxCols},(_,i)=>`Column ${i+1}`)
+    : maxCols===2               ? ['Input / Lookup Key','Standardised Value']
+    : maxCols===3               ? ['Input / Lookup Key','Standardised Value','Variant']
+    : ['Input / Lookup Key','Standardised Value',...Array.from({length:Math.min(maxCols-2,5)},(_,i)=>`Alt ${i+1}`)];
+
+  // ── Unique key values (col 1) ───────────────────────────────────────────
+  const uniqueKeys = [...new Set(rows.map(r=>r[0]).filter(Boolean))];
+
+  // ── Credential-specific grouping ────────────────────────────────────────
+  const byService={};
+  if(isCredentials){
+    rows.forEach(r=>{
+      const svc=r[0]||''; const ep=r[1]||'';
+      const node=ep.includes('_N2_')?'Node 2':ep.includes('_N1_')?'Node 1':'Node';
+      if(!byService[svc])byService[svc]={nodes:[]};
+      byService[svc].nodes.push(node);
+    });
+  }
+  const nodeGroups=isCredentials?[...new Set(rows.map(r=>(r[1]||'').includes('_N2_')?'Node 2':'Node 1'))]:[];
+
+  const mappingHint = fileName.replace(/WS_Creds_?/i,'').replace(/\.dic$/i,'').replace(/.*\//,'');
+
+  return { rows, uniqueKeys, byService, nodeGroups, headers, maxCols,
+           dicType, purpose, fname, fileName, mappingHint,
+           totalRows:rows.length, isLarge:rows.length>200 };
+}
+
+function renderDICResults(file, dic) {
+  setStep('done',100);
+  document.getElementById('processingSection').style.display='none';
+  document.getElementById('resultsSection').style.display='block';
+  document.getElementById('specBtn').disabled=true;
+  document.getElementById('txFilter').style.display='none';
+  document.getElementById('searchBox').style.display='none';
+
+  const kb=(file.size/1024).toFixed(1);
+  const typeLabel = {credentials:'Credential Dictionary',gender:'Gender Lookup',numeric:'Numeric Reference',reference:'Standardisation Dictionary'}[dic.dicType]||'Reference Table';
+  const typeColor = {credentials:'#a78bfa',gender:'#f472b6',numeric:'#60a5fa',reference:'#4ade80'}[dic.dicType]||'#4ade80';
+
+  document.getElementById('fileInfo').innerHTML=`
+    <div class="file-icon" style="background:#1e1a30"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="color:${typeColor}"><path d="M9 17H7A5 5 0 0 1 7 7h2M15 7h2a5 5 0 0 1 0 10h-2M11 12h2"/></svg></div>
+    <div>
+      <div class="file-name">${file.name} <span class="xml-type-badge" style="background:#1e1a30;color:${typeColor}">${typeLabel}</span></div>
+      <div class="file-meta">${dic.purpose} · ${kb} KB · ${dic.totalRows} rows · ${dic.maxCols} columns · ${dic.uniqueKeys.length} unique keys${dic.nodeGroups.length?' · '+dic.nodeGroups.join(', '):''}</div>
+    </div>
+    <button class="reset-btn" onclick="resetApp()">↩ New file</button>`;
+
+  // Stats
+  document.getElementById('statsRow').innerHTML=`
+    <div class="stat-card"><div class="stat-label">Total Rows</div><div class="stat-val green">${dic.totalRows.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="stat-label">Unique Keys</div><div class="stat-val blue">${dic.uniqueKeys.length.toLocaleString()}</div></div>
+    <div class="stat-card"><div class="stat-label">Columns</div><div class="stat-val amber">${dic.maxCols}</div></div>
+    <div class="stat-card"><div class="stat-label">Type</div><div class="stat-val" style="color:${typeColor};font-size:12px">${typeLabel}</div></div>
+    ${dic.nodeGroups.length?`<div class="stat-card"><div class="stat-label">Nodes</div><div class="stat-val purple">${dic.nodeGroups.length}</div></div>`:''}`;
+
+  activeTabs=[];
+  if(dic.dicType==='credentials'){
+    activeTabs=[{id:'svc',label:'Service Codes'},{id:'full',label:'Full Table'}];
+  } else {
+    activeTabs=[{id:'summary',label:'Summary'},{id:'full',label:'Reference Table'}];
+  }
+
+  document.getElementById('tabsRow').innerHTML=activeTabs.map((t,i)=>
+    `<button class="tab${i===0?' active':''}" onclick="showTab('${t.id}')">${t.label}</button>`
+  ).join('');
+
+  const panels=document.getElementById('tabPanels');
+  panels.innerHTML='';
+
+  if(dic.dicType==='credentials'){
+    buildDicCredTab(panels, dic, typeColor);
+  } else {
+    buildDicSummaryTab(panels, dic, typeColor, typeLabel);
+  }
+  buildDicFullTab(panels, dic, dic.dicType==='credentials');
+}
+
+function buildDicCredTab(panels, dic, color){
+  const div=document.createElement('div');
+  div.id='tab-svc'; div.className='tab-panel active';
+  div.innerHTML=`
+    <div class="table-card">
+      <div class="group-head" style="cursor:default"><span class="badge badge-cred">Authorised Service / AppID Codes</span>
+        <span style="color:var(--text3);font-size:10px;margin-left:8px">${dic.uniqueKeys.length} codes — these are the valid WebKey values the mapping accepts</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>#</th><th>Service / AppID Code</th><th>Nodes Configured</th><th>Purpose</th></tr></thead>
+        <tbody>${dic.uniqueKeys.map((sc,i)=>`<tr>
+          <td style="color:var(--text3);font-family:'DM Mono',monospace;font-size:11px">${i+1}</td>
+          <td style="font-weight:600;font-family:'DM Mono',monospace;font-size:12px;color:var(--accent)">${escHtml(sc)}</td>
+          <td style="font-size:11px;color:var(--text2)">${[...new Set((dic.byService[sc]?.nodes||[]))].join(', ')||'—'}</td>
+          <td style="font-size:11px;color:var(--text3)">${inferServicePurpose(sc)}</td>
+        </tr>`).join('')}</tbody>
+      </table></div>
+    </div>
+    <div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 18px;font-size:12px;color:var(--text3);line-height:1.8">
+      <span style="color:var(--text2);font-weight:500">📋 What are these codes?</span><br>
+      These <strong style="color:var(--text)">AppID / WebKey</strong> values are validated by the <code style="color:var(--accent);font-size:11px">stdz_credentials_check</code> token standardiser.
+      Requests with an AppID not in this list are rejected with error code <code style="color:var(--coral);font-size:11px">IDQ_2900</code>.
+      Columns 2–4 are Informatica DIS obfuscated tokens (not decodable outside the IDQ runtime).
+    </div>`;
+  panels.appendChild(div);
+}
+
+function buildDicSummaryTab(panels, dic, color, typeLabel){
+  const div=document.createElement('div');
+  div.id='tab-summary'; div.className='tab-panel active';
+
+  // Sample rows (first 8)
+  const sampleRows=dic.rows.slice(0,8);
+  const sampleHtml=sampleRows.map(r=>`<tr>${dic.headers.map((_,ci)=>`<td style="font-family:'DM Mono',monospace;font-size:11px;color:${ci===0?'var(--accent)':'var(--text2)'}">${escHtml(r[ci]||'')}</td>`).join('')}</tr>`).join('');
+
+  div.innerHTML=`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:14px">
+      <div style="font-size:12px;color:${color};font-weight:600;margin-bottom:6px">${escHtml(typeLabel)}</div>
+      <div style="font-size:13px;color:var(--text);margin-bottom:4px">${escHtml(dic.purpose)}</div>
+      <div style="font-size:11px;color:var(--text3)">
+        ${dic.totalRows.toLocaleString()} rows · ${dic.uniqueKeys.length.toLocaleString()} unique keys · ${dic.maxCols} columns
+        ${dic.isLarge?`<span style="color:var(--amber);margin-left:8px">⚠ Large file — full table tab shows first 200 rows</span>`:''}
+      </div>
+    </div>
+    <div class="table-card">
+      <div class="group-head" style="cursor:default">
+        <span class="badge" style="background:#1e1a30;color:${color};border:1px solid ${color}40">Sample — first 8 rows</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>${dic.headers.map(h=>`<th>${escHtml(h)}</th>`).join('')}</tr></thead>
+        <tbody>${sampleHtml}</tbody>
+      </table></div>
+    </div>`;
+  panels.appendChild(div);
+}
+
+function buildDicFullTab(panels, dic, isActive){
+  const div=document.createElement('div');
+  div.id='tab-full'; div.className='tab-panel'+(isActive?'':' ');
+  if(!isActive) div.className='tab-panel';
+
+  const displayRows=dic.rows.slice(0,200);
+  const capped=dic.totalRows>200;
+  const rowsHtml=displayRows.map(r=>`<tr>${dic.headers.map((_,ci)=>`<td style="font-family:'DM Mono',monospace;font-size:11px;color:${ci===0?'var(--accent)':'var(--text2)'}">${escHtml(r[ci]||'')}</td>`).join('')}</tr>`).join('');
+
+  div.innerHTML=`
+    ${capped?`<div style="background:var(--amber-dim);border:1px solid #5a4010;border-radius:8px;padding:8px 14px;margin-bottom:12px;font-size:12px;color:var(--amber)">
+      ⚠ Showing first 200 of ${dic.totalRows.toLocaleString()} rows — full file has ${(dic.file?.size/1024||0).toFixed(0)} KB of reference data
+    </div>`:''}
+    <div class="table-card">
+      <div class="group-head" style="cursor:default">
+        <span class="badge badge-logic">${escHtml(dic.fname.replace(/_/g,' '))}</span>
+        <span style="color:var(--text3);font-size:10px;margin-left:8px">${Math.min(200,dic.totalRows)} rows shown · ${dic.maxCols} columns</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr>${dic.headers.map(h=>`<th>${escHtml(h)}</th>`).join('')}</tr></thead>
+        <tbody>${rowsHtml}</tbody>
+      </table></div>
+    </div>`;
+  panels.appendChild(div);
+}
+
+function inferServicePurpose(code) {
+  const c = code.toUpperCase();
+  if (c.includes('CUSTOMER CENTRAL')) return 'Customer Central integration service';
+  if (c.includes('MXTMCM'))           return 'MX/TCM cross-system integration';
+  if (c.includes('CCPA'))             return 'CCPA / Privacy compliance service';
+  if (c.includes('NAERP'))            return 'North America ERP integration';
+  if (c.startsWith('CI'))             return 'CI environment — Customer Identity';
+  if (c.startsWith('HM'))             return 'HM environment — Household Match';
+  if (c.startsWith('ES'))             return 'ES environment — Email/Service';
+  if (c.startsWith('PS'))             return 'PS environment — Phone/Service';
+  if (c.startsWith('CL'))             return 'CL environment — Cleanse';
+  if (c.startsWith('IM'))             return 'IM environment — Identity Match';
+  if (c.startsWith('TS'))             return 'TS environment — Token/Service';
+  if (c.startsWith('TM'))             return 'TM environment — Telemetry/Match';
+  return 'Service credential';
+}
 function decode(s){if(!s)return '';try{return decodeURIComponent(s.replace(/\+/g,' '));}catch(e){return s.replace(/\+/g,' ');}}
 
 // ─────────────────────────────────────────────
@@ -341,38 +592,105 @@ function extractAll(xmlStr){
   const xmlType=detectXmlType(mappingName,xmlStr);
   const txEls=Array.from(doc.querySelectorAll('*')).filter(el=>el.localName==='AbstractTransformation');
   const rules=[];
+  const skipped=[];   // TX types not matched by any handler
+
+  // Infrastructure types intentionally not parsed (port definitions only, no logic)
+  const infraTypes=new Set(['mapplettx:mapplettinputtx','mapplettx:mappletoutputtx']);
+
   txEls.forEach(tx=>{
     const txName=tx.getAttribute('name')||'';
     const txType=(tx.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||tx.getAttribute('xsi:type')||'').toLowerCase();
+    let handled=false;
     if(txType.includes('filter')){
       const raw=tx.getAttribute('filterCondition')||'';
       if(raw)rules.push({type:'filter',category:'Filter',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:decode(raw).trim(),exprType:'filter'});
       Array.from(tx.querySelectorAll('*')).forEach(child=>{const fc=child.getAttribute('filterCondition')||'';const gn=child.getAttribute('name')||'';if(fc&&gn)rules.push({type:'filter',category:'Router Group',txName,ruleName:`${txName} → ${gn}`,priority:'—',priorityClass:'none',criteria:decode(fc).trim(),exprType:'filter'});});
-      return;
+      handled=true; return;
     }
     if(txType.includes('router')){
       Array.from(tx.querySelectorAll('*')).forEach(child=>{const fc=child.getAttribute('filterCondition')||'';const gn=child.getAttribute('name')||'';if(fc&&gn&&gn!=='Input'&&gn!=='Default')rules.push({type:'filter',category:'Router Group',txName,ruleName:`${txName} → ${gn}`,priority:'—',priorityClass:'none',criteria:decode(fc).trim(),exprType:'filter'});});
-      return;
+      handled=true; return;
     }
     if(txType.includes('lookup')){
       const lc=tx.getAttribute('lookupCondition')||'';const dso=tx.getAttribute('dso')||'';
-      rules.push({type:'lookup',category:'Lookup',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:(lc?'Condition: '+decode(lc):'')+(dso?'\nSource: '+dso:''),exprType:'lookup'});return;
+      rules.push({type:'lookup',category:'Lookup',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:(lc?'Condition: '+decode(lc):'')+(dso?'\nSource: '+dso:''),exprType:'lookup'});
+      handled=true; return;
     }
     if(txType.includes('tokenstandardiser')){
       const strats=[];Array.from(tx.querySelectorAll('*')).forEach(c=>{const sn=c.getAttribute('name')||'';const st=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||'');if(st.includes('Strategy')&&sn)strats.push(sn);});
-      rules.push({type:'special',category:'Token Standardiser',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:strats.length?'Strategies: '+strats.join(', '):'Token standardisation',exprType:'tokenStd'});return;
+      rules.push({type:'special',category:'Token Standardiser',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:strats.length?'Strategies: '+strats.join(', '):'Token standardisation',exprType:'tokenStd'});
+      handled=true; return;
     }
     if(txType.includes('labeler')){
       const lt=tx.getAttribute('labelerType')||'';const strats=[];Array.from(tx.querySelectorAll('*')).forEach(c=>{const sn=c.getAttribute('name')||'';const st=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||'');if(st.includes('Strategy')&&sn)strats.push(sn);});
-      rules.push({type:'special',category:'Labeler',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:`Type: ${lt||'token'}`+(strats.length?'\nStrategies: '+strats.join(', '):''),exprType:'labeler'});return;
+      rules.push({type:'special',category:'Labeler',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:`Type: ${lt||'token'}`+(strats.length?'\nStrategies: '+strats.join(', '):''),exprType:'labeler'});
+      handled=true; return;
     }
     if(txType.includes('parsertx')){
       const strats=[];Array.from(tx.querySelectorAll('*')).forEach(c=>{const sn=c.getAttribute('name')||'';const st=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||'');if(st.includes('Strategy')&&sn)strats.push(sn);});
-      rules.push({type:'special',category:'Parser',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:strats.length?'Strategies: '+strats.join(', '):'Data parser',exprType:'parser'});return;
+      rules.push({type:'special',category:'Parser',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:strats.length?'Strategies: '+strats.join(', '):'Data parser',exprType:'parser'});
+      handled=true; return;
     }
     if(txType.includes('mapplettx')&&!txType.includes('input')&&!txType.includes('output')){
       const ref=tx.getAttribute('mapplet')||'';
-      rules.push({type:'mapplet',category:'Sub-Mapplet',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:ref?'References: '+ref:'Inline mapplet',exprType:'mapplet'});return;
+      rules.push({type:'mapplet',category:'Sub-Mapplet',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:ref?'References: '+ref:'Inline mapplet',exprType:'mapplet'});
+      handled=true; return;
+    }
+    if(txType.includes('strdist')){
+      const algo=(()=>{for(const c of tx.querySelectorAll('*')){const a=c.getAttribute('algorithm')||'';if(a)return a;}return 'identity';})();
+      const matchLevel=(()=>{for(const c of tx.querySelectorAll('*')){const m=c.getAttribute('matchLevel')||'';if(m)return m;}return '';})();
+      const mandatory=[];
+      Array.from(tx.querySelectorAll('*')).forEach(c=>{if(c.getAttribute('fieldNecessity')==='MANDATORY'){mandatory.push(c.getAttribute('inputFirstHalf')==='true'?'Record A':'Record B');}});
+      const inputTypes=[...new Set(Array.from(tx.querySelectorAll('*')).map(c=>c.getAttribute('inputType')||'').filter(Boolean))];
+      const fieldsCompared=inputTypes.slice(0,6).map(t=>t.replace(/_[12]$/,'')).filter((v,i,a)=>a.indexOf(v)===i).join(', ');
+      const variant=txName.match(/_(P|A)_(P|A)$/i)?txName.match(/_(P|A)_(P|A)$/i)[0].replace('_',''):txName;
+      const variantLabel=variant.includes('P_P')?'Primary vs Primary':variant.includes('P_A')?'Primary vs Alternate':variant.includes('A_P')?'Alternate vs Primary':variant.includes('A_A')?'Alternate vs Alternate':'';
+      const criteria=`Algorithm: ${algo.charAt(0).toUpperCase()+algo.slice(1)} Resolution\nMatch Level: ${matchLevel||'TYPICAL'}\n${variantLabel?'Comparison: '+variantLabel+'\n':''}Fields compared: ${fieldsCompared||'Name + Address components'}\nOutput: Match score (double 0–1)`;
+      rules.push({type:'strdist',category:'String Distance',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria,exprType:'strdist'});
+      handled=true; return;
+    }
+    if(txType.includes('joiner')){
+      const jc=decode(tx.getAttribute('joinCondition')||'');
+      const jt=tx.getAttribute('joinType')||'innerJoin';
+      const joinLabel={leftOuterJoin:'Left Outer Join',rightOuterJoin:'Right Outer Join',fullOuterJoin:'Full Outer Join',innerJoin:'Inner Join'}[jt]||jt;
+      if(jc)rules.push({type:'filter',category:'Joiner',txName,ruleName:txName,priority:'—',priorityClass:'none',criteria:`Join Type: ${joinLabel}\nCondition: ${jc}`,exprType:'filter'});
+      handled=true; return;
+    }
+    if(txType.includes('rank')){
+      const rp=decode(tx.getAttribute('rankPort')||'');
+      const rt=tx.getAttribute('rankingType')||'';
+      const rn=tx.getAttribute('numberOfRows')||'';
+      rules.push({type:'special',category:'Rank',txName,ruleName:txName,priority:'—',priorityClass:'none',
+        criteria:`Ranking transformation\n${rp?'Rank field: '+rp+'\n':''}${rt?'Type: '+rt+'\n':''}${rn?'Top N rows: '+rn:''}`.trim(),exprType:'rank'});
+      handled=true; return;
+    }
+    if(txType.includes('normtx')){
+      rules.push({type:'special',category:'Normalizer',txName,ruleName:txName,priority:'—',priorityClass:'none',
+        criteria:'Normalizer — pivots or restructures record layout\nExpands repeated columns into multiple rows or vice versa',exprType:'normalizer'});
+      handled=true; return;
+    }
+    if(txType.includes('avtx')){
+      // Address Doctor / Address Validation transformation (Trillium)
+      const mode      = tx.getAttribute('mode')||'';
+      const strategy  = tx.getAttribute('activeInputStrategy')||'';
+      const casing    = tx.getAttribute('casingStyle')||'';
+      const defCountry= tx.getAttribute('defaultCountry')||'';
+      const force     = tx.getAttribute('forceCountry')||'';
+      const criteria  = [
+        mode        ? `Validation Mode: ${mode}` : '',
+        strategy    ? `Input Strategy: ${strategy}` : '',
+        defCountry  ? `Default Country: ${defCountry}` : '',
+        force&&force!=='*' ? `Force Country: ${force}` : force==='*'?'Force Country: Any (*)':'',
+        casing      ? `Output Casing: ${casing}` : '',
+      ].filter(Boolean).join('\n');
+      rules.push({type:'special',category:'Address Doctor',txName,ruleName:txName,priority:'—',priorityClass:'none',
+        criteria:criteria||'Informatica Address Doctor / Trillium address validation',exprType:'addressDoctor'});
+      handled=true; return;
+    }
+    if(txType.includes('uniontx')){
+      // Union — merges two or more record streams; no logic to extract; mark as infrastructure
+      skipped.push({name:txName, type:'Union', status:'infra', reason:'Union transformation — merges record streams; no rule logic to extract'});
+      handled=true; return;
     }
     if(txType.includes('expression')){
       Array.from(tx.querySelectorAll('*')).filter(el=>{const ex=el.getAttribute('expression')||'';return ex&&!ex.startsWith('http')&&!ex.match(/^\d+\.\d+\.\d+/);}).forEach(field=>{
@@ -380,9 +698,23 @@ function extractAll(xmlStr){
         const dec=decode(raw).trim();if(!dec||dec===fn)return;
         processField(txName,fn,dec,rules);
       });
+      handled=true;
+    }
+
+    // ── Catch unhandled TX types ────────────────────────────────────────────
+    if(!handled){
+      const isInfra = txType.includes('mappletinputtx')||txType.includes('mappletoutputtx');
+      const shortType = (txType.split(':').pop()||txType).replace(/tx$/i,'').replace(/([A-Z])/g,' $1').trim()||'Unknown';
+      if(isInfra){
+        // Intentionally not parsed — I/O port definitions carry no rule logic
+        skipped.push({name:txName, type:shortType, status:'infra', reason:'I/O port definition — no rule logic to extract'});
+      } else if(txType){
+        skipped.push({name:txName, type:shortType, status:'unhandled', reason:`Transformation type "${txType}" is not yet supported by the parser`});
+      }
     }
   });
-  return{rules,xmlType,mappingName};
+  rules.forEach(r => { r.explanation = explainRule(r); });
+  return{rules,skipped,xmlType,mappingName};
 }
 
 function detectXmlType(name,xmlStr){
@@ -427,7 +759,7 @@ function summariseExpr(fn,expr){const lo=expr.toLowerCase();const ops=[];if(lo.i
 // ─────────────────────────────────────────────
 // RENDER RESULTS
 // ─────────────────────────────────────────────
-function renderResults(file,{rules,xmlType,mappingName}){
+function renderResults(file,{rules,skipped=[],xmlType,mappingName}){
   setStep('done',100);
   document.getElementById('processingSection').style.display='none';
   document.getElementById('resultsSection').style.display='block';
@@ -436,7 +768,15 @@ function renderResults(file,{rules,xmlType,mappingName}){
   const typeLabels={match:'Match Rule',cleanse:'Cleanse / Stdz',service:'Service Rule',complex:'Cleanse Service',generic:'IDQ Mapping'};
   const typeBadges={match:'xml-type-match',cleanse:'xml-type-cleanse',service:'xml-type-service',complex:'xml-type-complex',generic:'xml-type-generic'};
   const kb=(file.size/1024).toFixed(1);
-  document.getElementById('fileInfo').innerHTML=`<div class="file-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="file-name">${file.name} <span class="xml-type-badge ${typeBadges[xmlType]||'xml-type-generic'}">${typeLabels[xmlType]||'IDQ Mapping'}</span></div><div class="file-meta">${mappingName} · ${kb} KB · ${rules.length} items extracted</div></div><button class="reset-btn" onclick="resetApp()">↩ New file</button>`;
+
+  // Coverage indicator
+  const unhandled = skipped.filter(s=>s.status==='unhandled');
+  const infra     = skipped.filter(s=>s.status==='infra');
+  const coverageBadge = unhandled.length
+    ? `<span style="background:var(--amber-dim);color:var(--amber);border:1px solid #5a4010;font-size:10px;padding:2px 8px;border-radius:4px;margin-left:8px;font-family:'DM Mono',monospace;cursor:pointer" onclick="showTab('coverage')" title="Click to see unparsed transformations">⚠ ${unhandled.length} unparsed TX</span>`
+    : `<span style="background:var(--accent-dim);color:var(--accent);border:1px solid #2a5a35;font-size:10px;padding:2px 8px;border-radius:4px;margin-left:8px;font-family:'DM Mono',monospace">✓ Full coverage</span>`;
+
+  document.getElementById('fileInfo').innerHTML=`<div class="file-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><div><div class="file-name">${file.name} <span class="xml-type-badge ${typeBadges[xmlType]||'xml-type-generic'}">${typeLabels[xmlType]||'IDQ Mapping'}</span>${coverageBadge}</div><div class="file-meta">${mappingName} · ${kb} KB · ${rules.length} items extracted · ${skipped.length} TX skipped (${infra.length} infrastructure, ${unhandled.length} unhandled)</div></div><button class="reset-btn" onclick="resetApp()">↩ New file</button>`;
 
   const matchRules=rules.filter(r=>['address','nonaddress','scoring'].includes(r.type));
   const logicRules=rules.filter(r=>r.type==='logic');
@@ -456,18 +796,97 @@ function renderResults(file,{rules,xmlType,mappingName}){
   push('logic','Expressions',r=>r.type==='logic');
   push('filter','Filters',r=>r.type==='filter');
   push('special','Token / Label / Parser',r=>r.type==='special');
+  push('strdist','String Distance',r=>r.type==='strdist');
   push('lookup','Lookups',r=>r.type==='lookup');
   push('mapplet','Sub-Mapplets',r=>r.type==='mapplet');
 
-  document.getElementById('tabsRow').innerHTML=activeTabs.map((t,i)=>`<button class="tab${i===0?' active':''}" onclick="showTab('${t.id}')">${t.label} <span style="font-size:10px;opacity:0.55">(${t.rules.length})</span></button>`).join('');
+  // Always add coverage tab — shows green if clean, amber warning if unhandled
+  activeTabs.push({id:'coverage', label: unhandled.length?`⚠ Coverage`:'✓ Coverage', rules:[], skipped});
+
+  document.getElementById('tabsRow').innerHTML=activeTabs.map((t,i)=>{
+    const isLast = t.id==='coverage';
+    const labelStyle = isLast&&unhandled.length ? 'color:var(--amber)' : isLast ? 'color:var(--accent)' : '';
+    const count = isLast ? '' : ` <span style="font-size:10px;opacity:0.55">(${t.rules.length})</span>`;
+    return `<button class="tab${i===0?' active':''}" style="${labelStyle}" onclick="showTab('${t.id}')">${t.label}${count}</button>`;
+  }).join('');
+
   const panels=document.getElementById('tabPanels');panels.innerHTML='';
-  activeTabs.forEach((t,i)=>{const div=document.createElement('div');div.id='tab-'+t.id;div.className='tab-panel'+(i===0?' active':'');panels.appendChild(div);buildTable('tab-'+t.id,t.rules);});
+  activeTabs.forEach((t,i)=>{
+    const div=document.createElement('div');
+    div.id='tab-'+t.id;
+    div.className='tab-panel'+(i===0?' active':'');
+    panels.appendChild(div);
+    if(t.id==='coverage') buildCoverageTab('tab-coverage', skipped, rules);
+    else buildTable('tab-'+t.id,t.rules);
+  });
+}
+
+function buildCoverageTab(elId, skipped, rules){
+  const el=document.getElementById(elId);
+  const unhandled=skipped.filter(s=>s.status==='unhandled');
+  const infra=skipped.filter(s=>s.status==='infra');
+  const handled=rules.length;
+
+  // Summary banner
+  let html=`<div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:16px 20px;margin-bottom:16px;display:flex;gap:24px;flex-wrap:wrap">
+    <div><div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Parsed</div><div style="font-size:20px;font-weight:500;color:var(--accent)">${handled}</div></div>
+    <div><div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Infrastructure (by design)</div><div style="font-size:20px;font-weight:500;color:var(--text2)">${infra.length}</div></div>
+    <div><div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px">Unhandled</div><div style="font-size:20px;font-weight:500;color:${unhandled.length?'var(--amber)':'var(--accent)'}">${unhandled.length}</div></div>
+  </div>`;
+
+  if(unhandled.length){
+    html+=`<div class="table-card" style="margin-bottom:16px">
+      <div class="group-head" style="cursor:default;background:#221a08;border-bottom-color:#5a4010">
+        <span class="badge badge-filter">⚠ Unhandled Transformations</span>
+        <span style="color:var(--amber);font-size:10px;margin-left:8px">These TX types exist in the XML but were not extracted — content may be incomplete</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Transformation Name</th><th>Type Detected</th><th>Reason</th></tr></thead>
+        <tbody>
+          ${unhandled.map(s=>`<tr>
+            <td style="font-family:'DM Mono',monospace;font-size:12px;font-weight:500;color:var(--amber)">${escHtml(s.name)}</td>
+            <td style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text2)">${escHtml(s.type)}</td>
+            <td style="font-size:12px;color:var(--text2)">${escHtml(s.reason)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+
+  if(infra.length){
+    html+=`<div class="table-card">
+      <div class="group-head" style="cursor:default">
+        <span class="badge badge-logic">Infrastructure (I/O Ports)</span>
+        <span style="color:var(--text3);font-size:10px;margin-left:8px">Intentionally skipped — these are port/interface definitions with no extractable rule logic</span>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Name</th><th>Type</th><th>Notes</th></tr></thead>
+        <tbody>
+          ${infra.map(s=>`<tr>
+            <td style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">${escHtml(s.name)}</td>
+            <td style="font-family:'DM Mono',monospace;font-size:11px;color:var(--text3)">${escHtml(s.type)}</td>
+            <td style="font-size:11px;color:var(--text3)">${escHtml(s.reason)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>`;
+  }
+
+  if(!unhandled.length&&!infra.length){
+    html=`<div style="text-align:center;padding:40px;color:var(--accent)">
+      <div style="font-size:36px;margin-bottom:12px">✓</div>
+      <div style="font-size:14px;font-weight:500;margin-bottom:6px">Full coverage — all transformations parsed</div>
+      <div style="font-size:12px;color:var(--text3)">Every AbstractTransformation in this XML was recognised and extracted.</div>
+    </div>`;
+  }
+
+  el.innerHTML=html;
 }
 
 // ─────────────────────────────────────────────
 // TABLE
 // ─────────────────────────────────────────────
-const BADGE_MAP={address:'badge-addr',nonaddress:'badge-noaddr',filter:'badge-filter',logic:'badge-logic',scoring:'badge-scoring',cleanse:'badge-cleanse',special:'badge-special',mapplet:'badge-mapplet',lookup:'badge-lookup'};
+const BADGE_MAP={address:'badge-addr',nonaddress:'badge-noaddr',filter:'badge-filter',logic:'badge-logic',scoring:'badge-scoring',cleanse:'badge-cleanse',special:'badge-special',mapplet:'badge-mapplet',lookup:'badge-lookup',strdist:'badge-strdist'};
 
 function buildTable(elId,rows){
   const el=document.getElementById(elId);
@@ -482,9 +901,10 @@ function buildTable(elId,rows){
     gRows.forEach(r=>{
       const pCls=`prio ${r.priorityClass||'none'}`;
       const pDisp=(!r.priority||r.priority==='—')?`<span style="color:var(--text3)">—</span>`:`<span class="${pCls}">${r.priority}</span>`;
-      const etag=r.exprType==='decode'?'<span style="color:var(--accent);font-size:9px;font-family:DM Mono">DECODE</span>':r.exprType==='iif'?'<span style="color:var(--blue);font-size:9px;font-family:DM Mono">IIF</span>':r.exprType==='filter'?'<span style="color:var(--amber);font-size:9px;font-family:DM Mono">FILTER</span>':r.exprType==='tokenStd'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">STD</span>':r.exprType==='labeler'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">LABEL</span>':r.exprType==='parser'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">PARSE</span>':r.exprType==='lookup'?'<span style="color:var(--orange);font-size:9px;font-family:DM Mono">LKP</span>':r.exprType==='mapplet'?'<span style="color:var(--rose);font-size:9px;font-family:DM Mono">MPLT</span>':'<span style="color:var(--text3);font-size:9px;font-family:DM Mono">EXPR</span>';
+      const etag=r.exprType==='decode'?'<span style="color:var(--accent);font-size:9px;font-family:DM Mono">DECODE</span>':r.exprType==='iif'?'<span style="color:var(--blue);font-size:9px;font-family:DM Mono">IIF</span>':r.exprType==='filter'?'<span style="color:var(--amber);font-size:9px;font-family:DM Mono">FILTER</span>':r.exprType==='tokenStd'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">STD</span>':r.exprType==='labeler'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">LABEL</span>':r.exprType==='parser'?'<span style="color:var(--sky);font-size:9px;font-family:DM Mono">PARSE</span>':r.exprType==='lookup'?'<span style="color:var(--orange);font-size:9px;font-family:DM Mono">LKP</span>':r.exprType==='mapplet'?'<span style="color:var(--rose);font-size:9px;font-family:DM Mono">MPLT</span>':r.exprType==='strdist'?'<span style="color:#e879f9;font-size:9px;font-family:DM Mono">SDIST</span>':r.exprType==='rank'?'<span style="color:#a3e635;font-size:9px;font-family:DM Mono">RANK</span>':r.exprType==='normalizer'?'<span style="color:#d4d47a;font-size:9px;font-family:DM Mono">NORM</span>':'<span style="color:var(--text3);font-size:9px;font-family:DM Mono">EXPR</span>';
       const cc=r.criteriaHtml?r.criteriaHtml:`<div class="criteria-text">${formatCriteria(r.criteria||'')}</div>`;
-      html+=`<tr class="data-row" data-search="${escAttr((r.ruleName+' '+r.txName+' '+r.criteria+' '+r.category).toLowerCase())}"><td>${pDisp}</td><td style="font-weight:500;font-size:12px">${escHtml(r.ruleName||'')}</td><td>${etag}</td><td>${cc}</td></tr>`;
+      const expHtml = r.explanation ? formatExplanation(r.explanation) : '';
+      html+=`<tr class="data-row" data-search="${escAttr((r.ruleName+' '+r.txName+' '+r.criteria+' '+r.category+' '+(r.explanation||'')).toLowerCase())}"><td>${pDisp}</td><td style="font-weight:500;font-size:12px">${escHtml(r.ruleName||'')}</td><td>${etag}</td><td>${cc}${expHtml}</td></tr>`;
     });
     html+='</tbody></table></div></div></div>';
   }
@@ -507,6 +927,230 @@ function formatCriteria(c){if(!c)return'<span style="color:var(--text3)">—</sp
 function escHtml(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#x27;');}
 function escAttr(s){return String(s).replace(/"/g,'&quot;');}
 
+// ═══════════════════════════════════════════════════════════════
+// BA EXPLANATION ENGINE  (deterministic, pattern-based)
+// ═══════════════════════════════════════════════════════════════
+
+function explainRule(rule) {
+  try { return buildExplanation(rule.ruleName||'', rule.criteria||'', rule.type||'', rule.exprType||'', rule.priority||''); }
+  catch(e) { return ''; }
+}
+
+function buildExplanation(fn, expr, type, exprT, priority) {
+  if (!expr || expr === '—') return '';
+  const up = expr.toUpperCase();
+  const fnL = fn.toLowerCase();
+
+  // ── 1. Match-rule priority scoring ──────────────────────────────────────
+  if (['address','nonaddress'].includes(type) && priority && priority !== '—') {
+    const domain = type === 'address' ? 'address' : 'non-address (name / email / phone)';
+    return `This rule assigns priority score ${priority} to a ${domain} match.\n• Records satisfying ALL listed conditions receive this priority code\n• ${condSummary(expr)}\n• Higher priority codes indicate stronger match confidence\n• Records not satisfying this rule fall through to the next lower priority`;
+  }
+
+  // ── 2. DECODE(TRUE, …) multi-branch ─────────────────────────────────────
+  if (exprT === 'decode' || up.trimStart().startsWith('DECODE(TRUE')) {
+    const n = countDecodeArgs(expr);
+    return `Output is determined by evaluating ${n} condition${n!==1?'s':''} in order of priority.\n• The first matching condition determines the output value\n• Conditions are checked sequentially; only the first match applies\n• A default fallback is applied if no condition is satisfied\n• Commonly used for classification, column routing, or output selection`;
+  }
+
+  // ── 3. Valid / Invalid status ────────────────────────────────────────────
+  if (up.includes("'VALID'") || up.includes("'INVALID'")) {
+    const fh = fnL.includes('email')?'email address':fnL.includes('phone')?'phone number':fnL.includes('address')?'address':'input value';
+    const checks=[];
+    if (up.includes('LENGTH(')) checks.push('length constraints are verified');
+    if (up.includes('REG_MATCH(')) checks.push('format is validated against a regular expression pattern');
+    if (up.includes('INSTR(')) checks.push('invalid character combinations are detected');
+    if (!checks.length) checks.push('defined business rules are evaluated');
+    return `The ${fh} is validated and classified as Valid or Invalid.\n• ${checks.join('\n• ')}\n• Records failing any check are classified as Invalid\n• The status flag controls downstream routing and error handling\n• Invalid records may be quarantined or excluded from further processing`;
+  }
+
+  // ── 4. NULL / whitespace coalesce (LTRIM/RTRIM = '') ────────────────────
+  if ((up.includes('LTRIM')&&up.includes('RTRIM')&&(up.includes("=''")))||(up.includes('ISNULL')&&up.includes('NULL'))) {
+    const toNull = up.includes(', NULL,') || up.includes(',NULL,');
+    if (toNull) return `The field may contain leading/trailing spaces, blank strings, or valid data.\n• Leading and trailing whitespace is stripped before the check\n• Whitespace-only or empty strings are treated as missing values\n• Missing values are output as NULL for downstream NULL-safe handling\n• Non-empty values are passed through to the output unchanged`;
+    return `The field is checked for blank or missing values before use.\n• Leading and trailing spaces are trimmed for the empty-value check\n• If the trimmed value is empty, a substitute value is applied\n• Otherwise the original field value is preserved in the output\n• Ensures consistent handling of missing data across the pipeline`;
+  }
+
+  // ── 5. Bare literal constant (error code, service tag, fixed value) ────────
+  if (expr.trim().match(/^'[^']{1,60}'$/) || expr.trim().match(/^"[^"]{1,60}"$/)) {
+    const val = expr.trim().replace(/^['"]|['"]$/g,'');
+    return `This field is set to a fixed constant value: "${val}"\n• The value never changes at runtime — it is hardcoded in the mapping\n• Typically used for error codes, service identifiers, or environment tags\n• Downstream systems use this value for routing, logging, or error handling`;
+  }
+
+  // ── 6. Length range validation ───────────────────────────────────────────
+  if (up.includes('LENGTH(')&&(up.includes(' < ')||up.includes(' > ')||up.includes('<')||up.includes('>'))) {
+    const lens = extractLengths(expr);
+    const parts = [];
+    if (lens.min !== null) parts.push(`Minimum accepted length: ${lens.min} character${lens.min!==1?'s':''}`);
+    if (lens.max !== null) parts.push(`Maximum accepted length: ${lens.max} character${lens.max!==1?'s':''}`);
+    const fh = fnL.includes('email')?'email':fnL.includes('phone')?'phone number':'field value';
+    return `The ${fh} is validated against length requirements.\n• ${parts.join('\n• ')}\n• Values outside the accepted range are treated as invalid\n• Length is measured in characters after surrounding spaces are trimmed`;
+  }
+
+  // ── 7. REG_MATCH pattern validation ─────────────────────────────────────
+  if (up.includes('REG_MATCH(')) {
+    const fh = fnL.includes('email')?'email address':fnL.includes('phone')?'phone number':'field value';
+    const pat = extractRegexPattern(expr);
+    const patHint = pat ? `Pattern applied: ${pat.substring(0,55)}${pat.length>55?'…':''}` : 'A defined format pattern is applied';
+    return `The ${fh} is validated using a regular expression.\n• ${patHint}\n• Characters and structure must conform to the expected format\n• Values not matching the pattern are flagged as invalid\n• Regex validation ensures consistent format compliance across all records`;
+  }
+
+  // ── 8. REG_REPLACE cleanse ───────────────────────────────────────────────
+  if (up.includes('REG_REPLACE(')) {
+    const pat = extractRegexPattern(expr);
+    let what = 'non-conforming characters';
+    if (pat) {
+      if (pat.includes('^0-9')) what = 'all non-numeric characters';
+      else if (pat.includes('^A-Za-z')) what = 'all non-alphabetic characters';
+      else if (pat.includes('[^\\w]')||pat.includes('[^\\\\w]')) what = 'special characters and symbols';
+    }
+    return `The field is cleansed by removing ${what}.\n• A regular expression identifies all characters to be removed or replaced\n• Only conforming characters are retained in the output\n• This normalises the field before validation, matching, or key generation\n• Cleansing is a pre-processing step applied before further transformations`;
+  }
+
+  // ── 9. SUBSTR extraction ─────────────────────────────────────────────────
+  if (up.includes('SUBSTR(')) {
+    const pos = extractSubstrPos(expr);
+    const fh = fnL.includes('phone')?'phone number':fnL.includes('zip')||fnL.includes('postal')?'postal code':'field';
+    const posHint = pos ? `Characters at positions ${pos.start} to ${pos.start+pos.len-1}` : 'A specific character range';
+    return `A specific segment is extracted from the ${fh}.\n• ${posHint} are extracted from the source value\n• Typically used to isolate area code, exchange, postal prefix, year, or identifier component\n• If the source value is shorter than expected, the extracted result may be empty or null\n• The extracted segment feeds independently into downstream validation or matching`;
+  }
+
+  // ── 10. Concatenation ────────────────────────────────────────────────────
+  if (expr.includes('||')) {
+    const hasTrim = up.includes('LTRIM')||up.includes('RTRIM');
+    const fh = fnL.includes('name')?'name components':fnL.includes('address')?'address components':'field values';
+    return `Multiple ${fh} are combined into a single output field.\n• Individual fields are joined in sequence using the string concatenation operator\n${hasTrim?'• Surrounding whitespace is trimmed from the combined result\n':''}• Produces a composite value for matching, display, or downstream export\n• NULL components contribute an empty string to the concatenated result`;
+  }
+
+  // ── 11. INSTR search ─────────────────────────────────────────────────────
+  if (up.includes('INSTR(')) {
+    return `The field is inspected for the presence of a specific character or substring.\n• INSTR returns the character position of the first match (0 if not found)\n• Used to detect invalid patterns, delimiters, or structural formatting issues\n• A non-zero result triggers the conditional branch handling that case\n• Prevents incorrectly formatted values from passing validation`;
+  }
+
+  // ── 12. REPLACECHR cleanup ───────────────────────────────────────────────
+  if (up.includes('REPLACECHR(')) {
+    return `Individual characters are removed or replaced within the field.\n• Each occurrence of the target character(s) is substituted character-by-character\n• Used to remove punctuation, dots, special symbols, or formatting characters\n• Produces a cleansed value suitable for standardisation and matching\n• Applied as a pre-processing step before further transformations`;
+  }
+
+  // ── 13. Case normalisation ───────────────────────────────────────────────
+  if (up.trimStart().startsWith('UPPER(')) return `The field is converted to uppercase for consistent standardisation.\n• Case normalisation ensures reliable comparison regardless of source casing\n• Typically applied before matching, lookup, or key generation steps\n• Original mixed-case input from the source is not preserved in the output`;
+  if (up.trimStart().startsWith('LOWER(')) return `The field is converted to lowercase for consistent standardisation.\n• Case normalisation ensures reliable comparison regardless of source casing\n• Typically applied before matching, lookup, or key generation steps\n• Original mixed-case input from the source is not preserved in the output`;
+
+  // ── 14. ISNULL check ─────────────────────────────────────────────────────
+  if (up.includes('ISNULL(')) return `The field is checked for NULL before processing.\n• NULL inputs are handled separately from blank or whitespace strings\n• A default or substitute value is applied when the input is NULL\n• Prevents NULL propagation from disrupting downstream transformations\n• Non-NULL values are passed through the logic unmodified`;
+
+  // ── 15. IS_NUMBER / numeric validation ───────────────────────────────────
+  if (up.includes('IS_NUMBER(')) return `The field is tested to confirm it holds a valid numeric value.\n• IS_NUMBER returns TRUE for values castable to a number\n• Used as a guard before arithmetic operations or numeric comparisons\n• Non-numeric values route to an error or alternative handling path\n• Prevents type conversion failures in downstream steps`;
+
+  // ── 16. TO_INTEGER / TO_DECIMAL conversion ───────────────────────────────
+  if (up.includes('TO_INTEGER(')||up.includes('TO_DECIMAL(')) return `The field value is converted to a numeric data type.\n• Input is expected to contain a valid numeric string representation\n• Conversion enables arithmetic comparisons and calculations\n• Non-numeric input typically results in a NULL or conversion error\n• Should be preceded by a format or IS_NUMBER validation check`;
+
+  // ── 17. Phone number parsing (LENGTH + SUBSTR combined) ─────────────────
+  if ((fnL.includes('phone')||fnL.includes('area_code'))&&up.includes('LENGTH(')&&up.includes('SUBSTR(')) {
+    return `Phone number components are parsed based on the total digit count.\n• 10-digit numbers → area code (digits 1–3) + local number (digits 4–10)\n• 11-digit numbers starting with '1' → country code (digit 1) + area code + local number\n• Numbers not matching expected lengths may be passed through unmodified\n• Standardises phone representation for downstream validation and matching`;
+  }
+
+  // ── 18. Window key / matching key ────────────────────────────────────────
+  if (fnL.includes('win_key')||fnL.includes('window_key')||fnL.includes('winkey')) {
+    return `A matching window key is generated for record grouping or deduplication.\n• The key is derived from cleansed field values to maximise match potential\n• NULL or empty inputs produce a NULL key, excluding the record from match groups\n• Non-empty values are preserved so records can be linked to matching candidates\n• Window keys are used to group candidate records before probabilistic match scoring`;
+  }
+
+  // ── 19. Service / environment name ───────────────────────────────────────
+  if (fnL.includes('servicename')||fnL.includes('service_name')||fnL.includes('o_service')) {
+    return `A service context identifier is constructed and assigned to each record.\n• Combines a fixed service code with the caller's Application ID (AppID)\n• Identifies the originating service in downstream audit trails and logs\n• Enables routing, monitoring, and charge-back tracking by service\n• The AppID is trimmed and converted to uppercase for consistency`;
+  }
+
+  // ── 20. Generic IIF ──────────────────────────────────────────────────────
+  if (up.includes('IIF(')||exprT==='iif') {
+    return `A conditional expression applies different logic based on the evaluation of input data.\n• ${condSummary(expr)}\n• Two outcome paths exist: one when the condition is true, one when false\n• Used for data validation, value routing, or conditional substitution\n• Nested IIF blocks allow multiple sequential conditions to be evaluated`;
+  }
+
+  // ── 21. Filter / Router condition ────────────────────────────────────────
+  if (type==='filter'||exprT==='filter') {
+    return `This filter controls which records proceed through this transformation path.\n• Only records satisfying ALL conditions listed pass this gate\n• Records not matching are routed to an alternative path or discarded\n• Acts as a data quality gate within the pipeline flow\n• Prevents invalid or incomplete records from reaching downstream systems`;
+  }
+
+  // ── 22. Lookup ────────────────────────────────────────────────────────────
+  if (type==='lookup'||exprT==='lookup') {
+    return `A reference table lookup enriches or validates the record.\n• The lookup joins the input on a key field to retrieve additional attributes\n• If no matching record exists in the reference table, NULL values are returned\n• Used to standardise codes, retrieve descriptions, or validate against known values\n• Lookup performance depends on cache configuration and reference table size`;
+  }
+
+  // ── 23. Token Standardiser ───────────────────────────────────────────────
+  if (exprT==='tokenStd') {
+    const rl=fn.toLowerCase();
+    if (rl.includes('prefix')||rl.includes('suffix')) return `This token standardiser normalises name prefix and/or suffix tokens.\n• Tokens are matched against a reference dictionary of known prefix/suffix variants\n• Recognised tokens are replaced with their canonical standardised form\n• Unrecognised tokens may be removed or preserved based on configuration\n• Applied as part of the name parsing and standardisation pipeline`;
+    if (rl.includes('roman')) return `This token standardiser resolves Roman numeral ambiguities.\n• Digits that may be confused with Roman numerals (e.g. '1'→'I', '0'→'O') are normalised\n• Prevents misclassification of name suffixes or titles during downstream parsing\n• Applied before the name labelling and parsing steps`;
+    if (rl.includes('space')||rl.includes('extra')) return `This token standardiser removes redundant whitespace.\n• Multiple consecutive spaces are collapsed to a single space\n• Leading and trailing spaces are removed from the field\n• Ensures consistent token boundaries for the downstream parser`;
+    return `This token standardiser applies dictionary-based normalisation rules.\n• Input tokens are matched against a configured reference dictionary\n• Matching tokens are replaced with their standard equivalents\n• Unmatched tokens pass through unchanged\n• Normalises abbreviations, titles, designations, or domain-specific terms`;
+  }
+
+  // ── 24. Labeler ───────────────────────────────────────────────────────────
+  if (exprT==='labeler') return `This labeler assigns semantic labels to tokens within the input field.\n• Each token is classified (e.g. FirstName, LastName, CompanyType) using a trained model\n• Labels guide downstream parsing to assign tokens to their correct output fields\n• Unrecognised tokens may receive a default or unknown label\n• Labelling accuracy directly affects parsed name component quality`;
+
+  // ── 25. Parser ────────────────────────────────────────────────────────────
+  if (exprT==='parser') {
+    if (fnL.includes('gender')) return `This parser assigns gender based on recognised name patterns.\n• First names, middle names, and prenominal titles are evaluated against a gender reference list\n• Gender is assigned as Male, Female, or Unknown based on match confidence\n• Used to enrich demographic data for reporting and identity matching`;
+    return `This parser decomposes the input field into its constituent name components.\n• Structured parsing rules identify and separate individual tokens\n• Parsed components are mapped to fields such as FirstName, LastName, Salutation\n• Unmatched or ambiguous tokens are captured in an unparsed remainder field`;
+  }
+
+  // ── 26. Sub-mapplet reference ─────────────────────────────────────────────
+  if (type==='mapplet'||exprT==='mapplet') return `This transformation invokes the reusable mapplet "${fn}".\n• The mapplet encapsulates a self-contained set of data quality rules\n• Input fields are passed in and cleansed/standardised outputs are returned\n• Using a shared mapplet ensures consistent rule application across all calling mappings\n• Changes to the mapplet automatically propagate to every mapping that references it`;
+
+  // ── Default ───────────────────────────────────────────────────────────────
+  const ops=[];
+  if (up.includes('LTRIM')||up.includes('RTRIM')) ops.push('whitespace trimming');
+  if (up.includes('UPPER(')||up.includes('LOWER(')) ops.push('case normalisation');
+  if (up.includes('IIF(')) ops.push('conditional logic');
+  if (ops.length) return `This expression applies ${ops.join(' and ')} to the field value.\n• The output is derived from the input after applying the listed operations\n• This step is part of the overall data cleansing and standardisation pipeline`;
+  return `This expression transforms or evaluates the "${fn}" field.\n• The output is derived from the input value according to the defined logic\n• This step contributes to the overall data quality processing pipeline`;
+}
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+function condSummary(expr) {
+  const up=expr.toUpperCase();
+  if (up.includes('LENGTH(')) return 'Condition checks the length of the input value';
+  if (up.includes('REG_MATCH(')) return 'Condition validates the value against a format pattern';
+  if (up.includes("=''")) return 'Condition checks for empty or whitespace-only values';
+  if (up.includes('ISNULL(')) return 'Condition checks whether the value is NULL';
+  if (up.includes('IS_NUMBER(')) return 'Condition verifies the value is numeric';
+  if (up.includes('INSTR(')) return 'Condition searches for a specific character or substring';
+  if (up.includes(' AND ')||up.includes(' OR ')) return 'Multiple conditions are combined with logical AND / OR operators';
+  return 'The condition evaluates the input against defined business criteria';
+}
+function countDecodeArgs(expr) {
+  try { const a=splitAllArgs(expr,expr.indexOf('(')+1); return Math.max(1,Math.floor((a.length-2)/2)); } catch(e){return 'multiple';}
+}
+function extractLengths(expr) {
+  const r={min:null,max:null};
+  const m=expr.match(/LENGTH\s*\([^)]+\)\s*[<>]=?\s*(\d+)/g);
+  if (!m) return r;
+  m.forEach(s=>{const n=parseInt(s.match(/(\d+)$/)?.[1]);if(isNaN(n))return;if(s.includes('>=')&&r.min===null)r.min=n;else if(s.includes('>'))r.min=n+1;else if(s.includes('<=')&&r.max===null)r.max=n;else if(s.includes('<'))r.max=n-1;});
+  return r;
+}
+function extractRegexPattern(expr) { const m=expr.match(/,\s*'([^']+)'/); return m?m[1]:null; }
+function extractSubstrPos(expr) { const m=expr.match(/SUBSTR\s*\([^,]+,\s*(\d+)\s*,\s*(\d+)/i); return m?{start:parseInt(m[1]),len:parseInt(m[2])}:null; }
+
+// Format for display in table cell
+function formatExplanation(exp) {
+  if (!exp) return '';
+  const lines = exp.split('\n');
+  const summary = lines[0];
+  const bullets = lines.slice(1).filter(l=>l.trim());
+  let h = `<div style="margin-top:10px;padding:10px 12px;border-top:2px solid rgba(56,189,248,0.25);background:rgba(14,165,233,0.06);border-radius:0 0 6px 6px">`;
+  h += `<div style="font-size:12px;color:#38bdf8;font-weight:600;margin-bottom:6px;font-family:'DM Sans',sans-serif;display:flex;align-items:flex-start;gap:6px">`;
+  h += `<span style="flex-shrink:0;margin-top:1px">📋</span><span>${escHtml(summary)}</span></div>`;
+  if (bullets.length) {
+    h += `<ul style="margin:0;padding-left:0;list-style:none">`;
+    bullets.forEach(b=>{
+      h += `<li style="font-size:11.5px;color:var(--text2);line-height:1.7;padding:2px 0 2px 14px;position:relative;font-family:'DM Sans',sans-serif">`;
+      h += `<span style="position:absolute;left:0;top:6px;color:#38bdf8;font-size:10px">◦</span>`;
+      h += `${escHtml(b.replace(/^[•*\-]\s*/,''))}</li>`;
+    });
+    h += '</ul>';
+  }
+  return h + '</div>';
+}
+
 function resetApp(){
   parsedRules=[];activeTabs=[];currentMappingName='';currentXmlType='';
   document.getElementById('uploadSection').style.display='block';
@@ -518,7 +1162,7 @@ function resetApp(){
   closeSpec();
 }
 
-function exportCSV(){const h=['Priority','Type','ExprType','Category','Transformation','Rule/Field','Criteria'];const r=parsedRules.map(r=>[r.priority,r.type,r.exprType||'',r.category,r.txName,r.ruleName,(r.criteria||'').replace(/\n/g,' ').replace(/,/g,';')]);const csv=[h,...r].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');dl('idq_rules.csv',csv,'text/csv');}
+function exportCSV(){const h=['Priority','Type','ExprType','Category','Transformation','Rule/Field','Criteria','BA_Explanation'];const r=parsedRules.map(r=>[r.priority,r.type,r.exprType||'',r.category,r.txName,r.ruleName,(r.criteria||'').replace(/\n/g,' ').replace(/,/g,';'),(r.explanation||'').replace(/\n/g,' | ')]);const csv=[h,...r].map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');dl('idq_rules.csv',csv,'text/csv');}
 function exportJSON(){dl('idq_rules.json',JSON.stringify(parsedRules,null,2),'application/json');}
 function dl(name,content,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([content],{type}));a.download=name;a.click();}
 
@@ -544,19 +1188,26 @@ function buildSpecContext(){
   const labelers=new Set(), parsers=new Set(), lookups=[];
   const filterConditions=[], errorFields=new Set();
   const matchRules=[], allTxNames=new Set();
+  const inputFields=new Set(), outputFields=new Set();
+  const validationStatuses=new Set(), expressionLogic=[];
+  const txInventory={};
 
   parsedRules.forEach(r=>{
     allTxNames.add(r.txName);
     const s=(r.txName+' '+r.ruleName+' '+r.category).toLowerCase();
-    if(s.includes('address'))domains.add('Address Cleansing');
-    if(s.includes('email'))domains.add('Email Validation');
-    if(s.includes('phone'))domains.add('Phone Cleansing');
-    if(s.includes('name')&&!s.includes('service'))domains.add('Name Standardisation');
-    if(s.includes('business')||s.includes('company'))domains.add('Business Name Standardisation');
-    if(s.includes('window_key')||s.includes('winkey'))domains.add('Window Key Generation');
+
+    // Domain detection
+    if(s.includes('address')||s.includes('country')||s.includes('postal')||s.includes('state')||s.includes('city'))domains.add('Address');
+    if(s.includes('email'))domains.add('Email');
+    if(s.includes('phone')||s.includes('area_code'))domains.add('Phone');
+    if(s.includes('name')&&!s.includes('service'))domains.add('Name');
+    if(s.includes('business')||s.includes('company'))domains.add('Business Name');
+    if(s.includes('window_key')||s.includes('winkey'))domains.add('Window Key');
     if(s.includes('webkey')||s.includes('verify_web'))domains.add('WebKey Validation');
-    if(s.includes('vin'))domains.add('VIN Matching');
-    if(s.includes('gender'))domains.add('Gender Assignment');
+    if(s.includes('vin'))domains.add('VIN');
+    if(s.includes('gender'))domains.add('Gender');
+    if(s.includes('country'))domains.add('Country Derivation');
+
     if(r.type==='mapplet')subMapplets.add(r.ruleName);
     if(r.category==='Token Standardiser')tokenStds.add(r.txName);
     if(r.category==='Labeler')labelers.add(r.txName);
@@ -565,160 +1216,338 @@ function buildSpecContext(){
     if(r.type==='filter')filterConditions.push(r.criteria);
     if(r.ruleName.toLowerCase().includes('error')||r.ruleName.toLowerCase().includes('status'))errorFields.add(r.ruleName);
     if(['address','nonaddress'].includes(r.type)&&r.priority!=='—')matchRules.push({name:r.ruleName,priority:r.priority,category:r.category});
+
+    // NEW: collect actual expression logic for the prompt
+    const crit=(r.criteria||'').trim();
+    if(crit && crit.length>5 && crit!=='—'){
+      expressionLogic.push({field:r.ruleName, tx:r.txName, logic:crit.substring(0,250), type:r.exprType||r.type});
+    }
+
+    // Extract validation status values (Valid_X, Invalid_X, 'CAN', etc.)
+    const statusMatches=crit.match(/['"](Valid_[A-Za-z_]+|Invalid_[A-Za-z_]+|[A-Z]{2,4})['"]/g);
+    if(statusMatches) statusMatches.forEach(s=>validationStatuses.add(s.replace(/['"]/g,'')));
+
+    // Transformation inventory
+    if(!txInventory[r.txName])txInventory[r.txName]={type:r.category||r.type,items:0};
+    txInventory[r.txName].items++;
+  });
+
+  // Try to infer input/output fields from field names with O_ prefix (output) vs plain names (input)
+  parsedRules.forEach(r=>{
+    if(r.ruleName.startsWith('O_')||r.ruleName.startsWith('Out_')||r.ruleName.startsWith('o_'))
+      outputFields.add(r.ruleName);
+    else if(r.ruleName.match(/^[A-Z][A-Z_]+$/)&&!r.ruleName.includes('.')){
+      // All-caps field names are likely input references
+    }
   });
 
   return{
     mappingName:currentMappingName, xmlType:currentXmlType, fileName:currentFileName,
-    domains:[...domains], subMapplets:[...subMapplets], tokenStds:[...tokenStds],
-    labelers:[...labelers], parsers:[...parsers], lookups, filterConditions:filterConditions.slice(0,5),
-    errorFields:[...errorFields], matchRules:matchRules.slice(0,10), allTxNames:[...allTxNames],
-    stats:{total:parsedRules.length, match:parsedRules.filter(r=>['address','nonaddress'].includes(r.type)).length,
-      cleanse:parsedRules.filter(r=>r.type==='cleanse').length, logic:parsedRules.filter(r=>r.type==='logic').length,
-      filter:parsedRules.filter(r=>r.type==='filter').length, special:parsedRules.filter(r=>['special','lookup','mapplet'].includes(r.type)).length}
+    domains:[...domains].filter(Boolean), subMapplets:[...subMapplets], tokenStds:[...tokenStds],
+    labelers:[...labelers], parsers:[...parsers], lookups,
+    filterConditions:filterConditions.slice(0,5),
+    errorFields:[...errorFields],
+    matchRules:matchRules.slice(0,15),
+    allTxNames:[...allTxNames],
+    expressionLogic:expressionLogic.slice(0,25),
+    validationStatuses:[...validationStatuses],
+    txInventory,
+    stats:{
+      total:parsedRules.length,
+      match:parsedRules.filter(r=>['address','nonaddress'].includes(r.type)).length,
+      cleanse:parsedRules.filter(r=>r.type==='cleanse').length,
+      logic:parsedRules.filter(r=>r.type==='logic').length,
+      filter:parsedRules.filter(r=>r.type==='filter').length,
+      special:parsedRules.filter(r=>['special','lookup','mapplet'].includes(r.type)).length
+    }
   };
 }
 
 async function generateSpec(){
   document.getElementById('specRegenBtn').disabled=true;
   specData=null;
-  document.getElementById('specBody').innerHTML=`<div class="spec-generating"><div class="sp"></div><p>Analysing mapping and generating specification…</p><p class="sub" id="specGenStep">Extracting context from parsed rules</p></div>`;
+  document.getElementById('specBody').innerHTML=`<div class="spec-generating"><div class="sp"></div><p>Analysing mapping and generating specification…</p><p class="sub" id="specGenStep">Extracting context</p></div>`;
 
+  setSpecStep('Building context from parsed rules…');
+  const ctx=buildSpecContext();
+
+  let narrative=null;
   try{
-    setSpecStep('Building context…');
-    const ctx=buildSpecContext();
-
-    setSpecStep('Calling AI to generate business narrative…');
-    const narrative=await callClaudeForNarrative(ctx);
-
-    setSpecStep('Assembling document…');
-    specData={ctx,narrative};
-    const html=renderSpecHtml(ctx,narrative);
-    document.getElementById('specBody').innerHTML=html;
+    setSpecStep('Calling AI for business narrative…');
+    narrative=await callClaudeForNarrative(ctx);
   }catch(err){
-    document.getElementById('specBody').innerHTML=`<div class="spec-error"><p>⚠ Spec generation encountered an issue: ${escHtml(err.message)}</p><p style="margin-top:12px;font-size:12px;color:#64748b">Falling back to template-based spec…</p></div>`;
-    setTimeout(()=>{try{const ctx=buildSpecContext();const html=renderSpecHtml(ctx,null);document.getElementById('specBody').innerHTML=html;specData={ctx,narrative:null};}catch(e2){}},1200);
-  }finally{
-    document.getElementById('specRegenBtn').disabled=false;
+    // AI failed — generate deterministic fallback silently
+    setSpecStep('Using deterministic fallback…');
   }
+
+  // Always fall back to deterministic content for any empty sections
+  const fallback=buildFallback(ctx);
+  const merged=mergeNarrative(narrative, fallback);
+
+  setSpecStep('Assembling document…');
+  specData={ctx,narrative:merged};
+  const html=renderSpecHtml(ctx,merged);
+  document.getElementById('specBody').innerHTML=html;
+  document.getElementById('specRegenBtn').disabled=false;
+}
+
+function mergeNarrative(ai, fallback){
+  // Use AI values where present, fall back to deterministic values where blank
+  if(!ai) return fallback;
+  const merge=(a,b)=>(a&&(typeof a==='string'?a.trim():a.length>0))?a:b;
+  return{
+    title:                 merge(ai.title,                fallback.title),
+    objective:             merge(ai.objective,             fallback.objective),
+    businessContext:       merge(ai.businessContext,       fallback.businessContext),
+    scopeIncluded:         merge(ai.scopeIncluded,         fallback.scopeIncluded),
+    scopeExcluded:         merge(ai.scopeExcluded,         fallback.scopeExcluded),
+    keyInputs:             merge(ai.keyInputs,             fallback.keyInputs),
+    businessRules:         merge(ai.businessRules,         fallback.businessRules),
+    flowDiagram:           merge(ai.flowDiagram,           fallback.flowDiagram),
+    outputs:               merge(ai.outputs,               fallback.outputs),
+    exampleScenarios:      merge(ai.exampleScenarios,      fallback.exampleScenarios),
+    dataQualityCategories: merge(ai.dataQualityCategories, fallback.dataQualityCategories),
+    assumptions:           merge(ai.assumptions,           fallback.assumptions),
+    summary:               merge(ai.summary,               fallback.summary),
+  };
 }
 
 async function callClaudeForNarrative(ctx){
-  const prompt=`You are a senior Business Analyst writing a Technical Specification for an Informatica IDQ mapping.
+  // ── Filter to only interesting expressions (skip trivial passthroughs) ──
+  const trivial = s => /^(UPPER|LOWER|LTRIM|RTRIM)\s*\(/.test(s.toUpperCase()) && !s.includes('IIF') && !s.includes('DECODE');
+  const interesting = ctx.expressionLogic
+    .filter(e => !trivial(e.logic))
+    .sort((a,b) => b.logic.length - a.logic.length)   // longest = most complex first
+    .slice(0, 8);
 
-MAPPING CONTEXT (extracted from the IDQ XML):
-Mapping Name: ${ctx.mappingName}
-File: ${ctx.fileName}
-Type: ${ctx.xmlType}
-Data Domains Covered: ${ctx.domains.join(', ') || 'General data quality'}
-Sub-Rules / Mapplets Referenced: ${ctx.subMapplets.slice(0,15).join(', ') || 'None'}
-Token Standardisers: ${ctx.tokenStds.slice(0,6).join(', ') || 'None'}
-Labelers: ${ctx.labelers.join(', ') || 'None'}
-Parsers: ${ctx.parsers.join(', ') || 'None'}
-Lookup Tables: ${ctx.lookups.map(l=>l.name).join(', ') || 'None'}
-Total Transformations: ${ctx.stats.total}
-Match Rules: ${ctx.stats.match}, Cleanse Logic: ${ctx.stats.cleanse}, Filters: ${ctx.stats.filter}, Special TX: ${ctx.stats.special}
+  // ── Compact context string ────────────────────────────────────────────────
+  const logicLines = interesting.map(e=>`${e.field}: ${e.logic.substring(0,150)}`).join('\n');
+  const lookupLines= ctx.lookups.slice(0,4).map(l=>`${l.name} (${l.criteria.substring(0,60)})`).join(', ');
+  const matchSample= ctx.matchRules.slice(0,4).map(r=>`${r.name}→${r.priority}`).join(', ');
 
-Write a professional Technical Specification. Return ONLY valid JSON — no preamble, no markdown, no backticks:
-{
-  "title": "human-readable project title (3-6 words)",
-  "businessObjective": "2-3 sentences describing the purpose of this mapping",
-  "businessProblems": ["problem 1","problem 2","problem 3","problem 4"],
-  "businessGoals": ["goal 1","goal 2","goal 3","goal 4","goal 5"],
-  "scopeIncluded": ["included item based on what domains/rules exist"],
-  "scopeExcluded": ["item not covered by this mapping"],
-  "functionalRequirements": [
-    {"id":"BR-001","title":"requirement name","description":"what the system does","expectedResult":"what the output should be","errorHandling":"how errors are handled"}
-  ],
-  "dataQualityRequirements": ["req 1","req 2","req 3"],
-  "errorHandlingRequirements": ["req 1","req 2","req 3"],
-  "successCriteria": ["criteria 1","criteria 2","criteria 3"],
-  "businessBenefits": ["benefit 1","benefit 2","benefit 3","benefit 4"],
-  "assumptions": ["assumption 1","assumption 2","assumption 3"]
-}
+  const prompt=`You are a Business Analyst. Write a requirements document for this Informatica IDQ mapping.
+Be SPECIFIC — use real field names and real output values. Keep each text field to 1-2 sentences maximum.
 
-Generate one functional requirement per major domain. Be specific to what this mapping actually does. Return ONLY the JSON object.`;
+MAPPING: ${ctx.mappingName}
+DOMAINS: ${ctx.domains.join(', ')||'Data Quality'}
+LOGIC (key expressions):
+${logicLines||'(see sub-rules)'}
+LOOKUPS: ${lookupLines||'None'}
+MATCH RULES SAMPLE: ${matchSample||'None'}
+VALIDATION VALUES: ${ctx.validationStatuses.slice(0,8).join(', ')||'None'}
+SUB-RULES: ${ctx.subMapplets.slice(0,6).join(', ')||'None'}
+STATS: ${ctx.stats.total} total, ${ctx.stats.match} match rules, ${ctx.stats.filter} filters
+
+Return ONLY this JSON (no markdown, no backticks). Keep values SHORT:
+{"title":"4-6 word title","objective":"1 sentence","context":"1-2 sentences","scopeIn":["item1","item2","item3"],"scopeOut":["item1","item2"],"inputs":[{"f":"FIELD","d":"description"}],"rules":[{"n":"6.1","t":"rule title","d":"1 sentence description of what is checked","out":["OutputVal1","OutputVal2"]}],"flow":"12-line ASCII flowchart","outputs":[{"f":"FIELD","d":"description"}],"scenarios":[{"s":"scenario name","i":"input values","o":"output value"}],"dq":["Accuracy","Standardisation"],"assumptions":["assumption1","assumption2"],"summary":"1-2 sentences"}`;
 
   const resp=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model:'claude-sonnet-4-20250514',max_tokens:1000,messages:[{role:'user',content:prompt}]})});
   const data=await resp.json();
   const text=(data.content||[]).map(c=>c.text||'').join('');
   const m=text.match(/\{[\s\S]+\}/);
-  if(!m)throw new Error('Could not parse AI response');
-  return JSON.parse(m[0]);
+  if(!m) throw new Error('API returned unparseable response');
+  const raw=JSON.parse(m[0]);
+
+  // ── Normalise compact keys to full names ─────────────────────────────────
+  return {
+    title:         raw.title||'',
+    objective:     raw.objective||raw.businessObjective||'',
+    businessContext: raw.context||raw.businessContext||'',
+    scopeIncluded: raw.scopeIn||raw.scopeIncluded||[],
+    scopeExcluded: raw.scopeOut||raw.scopeExcluded||[],
+    keyInputs:     (raw.inputs||raw.keyInputs||[]).map(x=>typeof x==='string'?{field:x,description:''}:{field:x.f||x.field||'',description:x.d||x.description||''}),
+    businessRules: (raw.rules||raw.businessRules||[]).map((x,i)=>({number:x.n||x.number||`6.${i+1}`,title:x.t||x.title||'',description:x.d||x.description||'',outputs:x.out||x.outputs||[]})),
+    flowDiagram:   raw.flow||raw.flowDiagram||'',
+    outputs:       (raw.outputs||[]).map(x=>typeof x==='string'?{field:x,description:''}:{field:x.f||x.field||'',description:x.d||x.description||''}),
+    exampleScenarios:(raw.scenarios||raw.exampleScenarios||[]).map(x=>({scenario:x.s||x.scenario||'',input:x.i||x.input||'',output:x.o||x.output||x.expectedOutput||''})),
+    dataQualityCategories: raw.dq||raw.dataQualityCategories||[],
+    assumptions:   raw.assumptions||[],
+    summary:       raw.summary||''
+  };
+}
+
+// ── Deterministic fallback when API fails ────────────────────────────────────
+function buildFallback(ctx){
+  // Infer inputs from expression logic field references
+  const inputHints=new Set();
+  ctx.expressionLogic.forEach(e=>{
+    // extract bare ALL_CAPS field names referenced inside expressions
+    const refs=e.logic.match(/\b([A-Z][A-Z0-9_]{2,})\b/g)||[];
+    refs.filter(r=>!r.startsWith('IIF')&&!r.startsWith('DECODE')&&!r.startsWith('REG_')&&!r.startsWith('LKP')&&r!==e.field).forEach(r=>inputHints.add(r));
+  });
+
+  const domStr=ctx.domains.join(', ')||'data quality';
+  const title=humaniseName(ctx.mappingName);
+
+  // Build business rules from actual expression logic
+  const autoRules=ctx.expressionLogic.filter(e=>e.logic.includes('IIF')||e.logic.includes('DECODE')||e.logic.includes('REG_')).slice(0,5).map((e,i)=>{
+    const statuses=(e.logic.match(/['"](Valid[_A-Za-z]*|Invalid[_A-Za-z]*|[A-Z]{2,4})['"]/g)||[]).map(s=>s.replace(/['"]/g,''));
+    return{number:`6.${i+1}`,title:e.field.replace(/^O_/,'').replace(/_/g,' '),description:explainRule({criteria:e.logic,ruleName:e.field,type:'logic',exprType:e.type})||`Evaluates ${e.field} using conditional logic`,outputs:statuses};
+  });
+
+  // Scope from sub-mapplets and domains
+  const scopeIn=[...ctx.domains.map(d=>d+' processing'),...ctx.subMapplets.slice(0,3).map(m=>m+' (sub-rule)')];
+  const lookupScope=ctx.lookups.map(l=>l.name+' reference validation');
+
+  return{
+    title,
+    objective:`${title} is an Informatica IDQ mapping that applies ${domStr} rules to incoming records.`,
+    businessContext:`This mapping processes ${ctx.stats.total} transformations across ${ctx.domains.length||1} domain(s), applying ${ctx.stats.match} match rules and ${ctx.stats.filter} filter conditions. It is designed to ensure data quality before records are consumed by downstream systems.`,
+    scopeIncluded:[...new Set([...scopeIn,...lookupScope])].filter(Boolean).slice(0,5),
+    scopeExcluded:['Fields not referenced in this mapping','Domains not covered by the configured rules'],
+    keyInputs:[...[...inputHints].slice(0,6).map(f=>({field:f,description:inferFieldDesc(f)})),...ctx.lookups.map(l=>({field:'(via '+l.name+')',description:'Reference table lookup — '+l.criteria.substring(0,60)}))],
+    businessRules:autoRules.length?autoRules:[{number:'6.1',title:'Data Quality Processing',description:`Records are processed through ${ctx.stats.total} transformations covering ${domStr}.`,outputs:[]}],
+    flowDiagram:'',
+    outputs:ctx.expressionLogic.filter(e=>e.field.startsWith('O_')||e.field.startsWith('Out_')).slice(0,5).map(e=>({field:e.field,description:`Derived from ${e.field.replace(/^O_|^Out_/,'').replace(/_/g,' ').toLowerCase()} processing`})),
+    exampleScenarios:[],
+    dataQualityCategories:[...new Set([...ctx.domains.map(d=>{if(d.includes('Match'))return 'Accuracy';if(d.includes('Cleanse')||d.includes('Standardis'))return 'Standardisation';if(d.includes('Enrichment')||d.includes('Country')||d.includes('Derivation'))return 'Enrichment';return 'Completeness';}),'Data Quality'])].slice(0,4),
+    assumptions:[`Source system provides ${domStr} data in the expected format`,`Lookup/reference tables are accurate and maintained`,...ctx.subMapplets.slice(0,2).map(m=>`Sub-rule ${m} is deployed and accessible`),'Downstream systems can consume the standardised output'],
+    summary:`${title} applies ${ctx.stats.total} data quality transformations to standardise and validate ${domStr} data.${ctx.matchRules.length?' It produces '+ctx.matchRules.length+' match-rule priority scores for downstream duplicate detection.':''}`
+  };
+}
+
+function inferFieldDesc(field){
+  const f=field.toLowerCase();
+  if(f.includes('email'))return 'Email address field';
+  if(f.includes('phone')||f.includes('tel'))return 'Phone number field';
+  if(f.includes('postal')||f.includes('zip'))return 'Postal / ZIP code';
+  if(f.includes('state')||f.includes('province'))return 'State or Province';
+  if(f.includes('country'))return 'Country code or name';
+  if(f.includes('address')||f.includes('street'))return 'Address component';
+  if(f.includes('last')||f.includes('surname'))return 'Surname / Last name';
+  if(f.includes('first')||f.includes('given'))return 'First / Given name';
+  if(f.includes('name'))return 'Name field';
+  if(f.includes('dob')||f.includes('birth')||f.includes('date'))return 'Date value';
+  if(f.includes('id')||f.includes('key'))return 'Identifier / Key field';
+  if(f.includes('gender')||f.includes('sex'))return 'Gender code';
+  return 'Input data field';
 }
 
 function renderSpecHtml(ctx,n){
   const today=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'long',year:'numeric'});
   const title=n?.title||humaniseName(ctx.mappingName);
-  const txTypeLabel={match:'Match Rule',cleanse:'Cleanse / Standardisation',service:'Service Rule',complex:'Cleanse Service Orchestration',generic:'IDQ Mapping'};
 
+  // ── Helpers ────────────────────────────────────────────────────────────────
   const li=arr=>(arr||[]).map(x=>`<li>${escHtml(x)}</li>`).join('');
-  const req=(r,i)=>`<h3>${escHtml(r.title||'Requirement '+(i+1))} <span style="color:#94a3b8;font-weight:400">${escHtml(r.id||'BR-00'+(i+1))}</span></h3>
-    <div class="req-box"><table>
-      <tr><td>Requirement ID</td><td>${escHtml(r.id||'BR-00'+(i+1))}</td></tr>
-      <tr><td>Description</td><td>${escHtml(r.description||'')}</td></tr>
-      <tr><td>Expected Result</td><td>${escHtml(r.expectedResult||'')}</td></tr>
-      ${r.errorHandling?`<tr><td>Error Handling</td><td>${escHtml(r.errorHandling)}</td></tr>`:''}
-    </table></div>`;
+  const tbl=(headers,rows,opts={})=>`<table>
+    <thead><tr>${headers.map(h=>`<th>${escHtml(h)}</th>`).join('')}</tr></thead>
+    <tbody>${(rows||[]).map(r=>`<tr>${r.map((c,ci)=>`<td${opts.mono&&ci===0?' style="font-family:monospace;font-weight:600"':''}>${escHtml(String(c||''))}</td>`).join('')}</tr>`).join('')}</tbody>
+  </table>`;
 
-  // Transformation inventory table
-  const txGroups={};
-  parsedRules.forEach(r=>{if(!txGroups[r.txName])txGroups[r.txName]={type:r.category,items:0,exprTypes:new Set()};txGroups[r.txName].items++;txGroups[r.txName].exprTypes.add(r.exprType||r.type);});
-  const txRows=Object.entries(txGroups).map(([name,info])=>`<tr><td>${escHtml(name)}</td><td>${escHtml(info.type)}</td><td>${info.items}</td><td>${escHtml([...info.exprTypes].join(', '))}</td></tr>`).join('');
+  // ── Sections builder (auto-numbered) ──────────────────────────────────────
+  let secN=0;
+  const sec=(title,html,skip=false)=>skip?'':
+    `<h2><span class="section-num">${++secN}.</span> ${title}</h2>${html}`;
 
-  // Top match rules
-  const matchRows=ctx.matchRules.length?ctx.matchRules.map(r=>`<tr><td>${escHtml(r.name)}</td><td>${escHtml(r.category)}</td><td>${escHtml(r.priority)}</td></tr>`).join(''):'<tr><td colspan="3" style="color:#94a3b8;font-style:italic">No priority-ranked match rules in this mapping</td></tr>';
+  // ── Business rules ─────────────────────────────────────────────────────────
+  const rulesHtml=(n?.businessRules||[]).map((rule,i)=>`
+    <h3><span style="color:#94a3b8;font-weight:400;margin-right:6px">${escHtml(rule.number||`${secN}.${i+1}`)}</span>${escHtml(rule.title||'')}</h3>
+    <p>${escHtml(rule.description||'')}</p>
+    ${(rule.outputs||[]).length?`<p style="margin-bottom:4px"><strong>Outputs:</strong></p><ul>${(rule.outputs||[]).map(o=>`<li><code style="background:#f0f4f0;padding:1px 5px;border-radius:3px;font-size:11px">${escHtml(o)}</code></li>`).join('')}</ul>`:''}
+  `).join('');
 
-  return`<div class="cover">
+  // ── Flow diagram ──────────────────────────────────────────────────────────
+  const flowHtml=n?.flowDiagram
+    ?`<div style="background:#fafafa;border:1px solid #dde3ec;border-radius:8px;padding:18px 20px;font-family:'Courier New',Courier,monospace;font-size:11.5px;white-space:pre;overflow-x:auto;line-height:1.6;color:#1e2030">${escHtml(n.flowDiagram)}</div>`:'';
+
+  // ── Example scenarios ─────────────────────────────────────────────────────
+  const scenariosHtml=(n?.exampleScenarios||[]).length
+    ?tbl(['Scenario','Input','Expected Output'],(n.exampleScenarios||[]).map(s=>[s.scenario,s.input,s.output||s.expectedOutput||''])):'';
+
+  // ── Transformation inventory ───────────────────────────────────────────────
+  const txRows=Object.entries(ctx.txInventory||{})
+    .map(([name,info])=>`<tr><td style="font-family:monospace;font-size:11px">${escHtml(name)}</td><td>${escHtml(info.type||'')}</td><td>${info.items||0}</td></tr>`).join('');
+
+  // ── Match rules catalogue ─────────────────────────────────────────────────
+  const matchRows=ctx.matchRules.length
+    ?ctx.matchRules.map(r=>`<tr><td style="font-family:monospace;font-size:11px">${escHtml(r.name)}</td><td>${escHtml(r.category)}</td><td style="font-weight:600;color:#2E75B6">${escHtml(r.priority)}</td></tr>`).join('')
+    :'<tr><td colspan="3" style="color:#94a3b8;font-style:italic">No priority-ranked match rules in this mapping</td></tr>';
+
+  // ── DQ category tags ──────────────────────────────────────────────────────
+  const dqTags=(n?.dataQualityCategories||['Data Quality']).map(c=>`<span class="tag">${escHtml(c)}</span>`).join(' ');
+
+  return `
+  <!-- COVER -->
+  <div class="cover">
     <h1>${escHtml(title)}</h1>
-    <div class="meta">Technical Specification Document &nbsp;·&nbsp; Generated ${today}</div>
-    <div style="margin-top:12px">${ctx.domains.map(d=>`<span class="tag">${escHtml(d)}</span>`).join('')}</div>
-    <div style="margin-top:8px;color:#64748b;font-size:11px">${escHtml(ctx.mappingName)} &nbsp;·&nbsp; ${escHtml(txTypeLabel[ctx.xmlType]||'IDQ Mapping')} &nbsp;·&nbsp; ${ctx.stats.total} transformations extracted</div>
+    <div class="meta">Business Analyst Requirements Document &nbsp;·&nbsp; ${today}</div>
+    <div style="margin-top:12px">${dqTags}</div>
+    <div style="margin-top:8px;color:#64748b;font-size:11px">${escHtml(ctx.mappingName)} &nbsp;·&nbsp; ${escHtml(ctx.fileName||'')} &nbsp;·&nbsp; ${ctx.stats.total} items extracted</div>
   </div>
 
-  <h2><span class="section-num">1.</span> Business Objective</h2>
-  <p>${escHtml(n?.businessObjective||'This mapping implements data quality processing for the '+ctx.domains.join(', ')+' domain(s), ensuring data is cleansed, validated, and standardised before downstream consumption.')}</p>
+  ${sec('Objective',`<p>${escHtml(n?.objective||n?.businessObjective||humaniseName(ctx.mappingName)+' — data quality processing rule.')}</p>`)}
 
-  <h2><span class="section-num">2.</span> Business Problems Addressed</h2>
-  <ul>${li(n?.businessProblems||ctx.domains.map(d=>`Inconsistent or invalid ${d} data`))}</ul>
+  ${sec('Business Context',`
+    <p>${escHtml(n?.businessContext||'')}</p>
+    ${(n?.businessProblems||[]).length?`<p>This rule addresses:</p><ul>${li(n.businessProblems)}</ul>`:''}
+    ${(n?.businessGoals||[]).length?`<p>It is designed to:</p><ul>${li(n.businessGoals)}</ul>`:''}
+  `)}
 
-  <h2><span class="section-num">3.</span> Business Goals</h2>
-  <ul>${li(n?.businessGoals||ctx.domains.map(d=>`Standardise and validate ${d} data`))}</ul>
+  ${sec('Scope',`
+    <p>${escHtml(n?.scopeDescription||'')}</p>
+    ${(n?.scopeIncluded||[]).length?`<p><strong>Included</strong></p><ul>${li(n.scopeIncluded)}</ul>`:''}
+    ${(n?.scopeExcluded||[]).length?`<p><strong>Excluded</strong></p><ul>${li(n.scopeExcluded)}</ul>`:''}
+  `)}
 
-  <h2><span class="section-num">4.</span> Scope</h2>
-  <h3>Included</h3>
-  <ul>${li(n?.scopeIncluded||ctx.domains)}</ul>
-  <h3>Excluded</h3>
-  <ul>${li(n?.scopeExcluded||['Items not reflected in this mapping'])}</ul>
+  ${sec('Key Inputs',
+    (n?.keyInputs||[]).length
+      ? tbl(['Field','Description'],(n.keyInputs||[]).map(f=>[f.field,f.description]),{mono:true})
+      : '<p style="color:#94a3b8;font-style:italic">Input fields not specified.</p>',
+    !(n?.keyInputs||[]).length && !ctx.expressionLogic.length
+  )}
 
-  <h2><span class="section-num">5.</span> Functional Requirements</h2>
-  ${(n?.functionalRequirements||ctx.domains.map((d,i)=>({id:'BR-00'+(i+1),title:d,description:`System shall process ${d}`,expectedResult:`${d} is standardised`,errorHandling:'Invalid records flagged'}))).map((r,i)=>req(r,i)).join('')}
+  ${sec('Reference Data',
+    ctx.lookups.length
+      ? tbl(['Lookup Table','Purpose / Join Condition'],ctx.lookups.map(l=>[l.name,l.criteria]),{mono:true})
+      + (n?.referenceData?.length?'<p style="margin-top:8px">'+n.referenceData.map(r=>`<strong>${escHtml(r.table)}</strong> — ${escHtml(r.purpose)}`).join('<br>')+'</p>':'')
+      : '<p style="color:#94a3b8;font-style:italic">No reference / lookup tables found.</p>',
+    !ctx.lookups.length&&!(n?.referenceData||[]).length
+  )}
 
-  <h2><span class="section-num">6.</span> Transformation Inventory</h2>
-  <table><thead><tr><th>Transformation Name</th><th>Category</th><th>Items</th><th>Expression Types</th></tr></thead><tbody>${txRows}</tbody></table>
+  ${sec('Business Rules',
+    (n?.businessRules||[]).length
+      ? rulesHtml
+      : `<p>The following expression logic was extracted from the mapping:</p>
+         <ul>${ctx.expressionLogic.slice(0,8).map(e=>`<li><code style="font-size:11px">${escHtml(e.field)}</code> — ${escHtml(e.logic.substring(0,120))}</li>`).join('')}</ul>`
+  )}
 
-  <h2><span class="section-num">7.</span> Sub-Rules Referenced</h2>
-  ${ctx.subMapplets.length?`<ul>${ctx.subMapplets.map(m=>`<li><code>${escHtml(m)}</code></li>`).join('')}</ul>`:'<p style="color:#94a3b8">No sub-mapplet references found.</p>'}
+  ${sec('Simplified Business Flow', flowHtml||'<p style="color:#94a3b8;font-style:italic">Flow diagram was not generated.</p>', !flowHtml)}
 
-  <h2><span class="section-num">8.</span> Match Rule Catalogue</h2>
-  <table><thead><tr><th>Rule Name</th><th>Category</th><th>Priority Code</th></tr></thead><tbody>${matchRows}</tbody></table>
+  ${sec('Output',
+    (n?.outputs||[]).length
+      ? tbl(['Field','Description'],(n.outputs||[]).map(f=>[f.field,f.description]),{mono:true})
+      : ctx.matchRules.length
+        ? tbl(['Rule','Category','Priority Code'],ctx.matchRules.slice(0,10).map(r=>[r.name,r.category,r.priority]))
+        : '<p style="color:#94a3b8;font-style:italic">Output fields not specified.</p>'
+  )}
 
-  ${ctx.lookups.length?`<h2><span class="section-num">9.</span> Reference Data / Lookups</h2><ul>${ctx.lookups.map(l=>`<li><strong>${escHtml(l.name)}</strong> — ${escHtml(l.criteria.substring(0,120))}</li>`).join('')}</ul>`:''}
+  ${sec('Example Scenarios',
+    scenariosHtml||'<p style="color:#94a3b8;font-style:italic">No example scenarios generated.</p>',
+    !scenariosHtml
+  )}
 
-  <h2><span class="section-num">${ctx.lookups.length?10:9}.</span> Data Quality Requirements</h2>
-  <ul>${li(n?.dataQualityRequirements||['Remove leading and trailing whitespace','Standardise capitalisation','Validate mandatory fields','Handle null values consistently','Apply consistent format across output fields'])}</ul>
+  ${sec('Data Quality Category',`<p>${dqTags}</p>`)}
 
-  <h2><span class="section-num">${ctx.lookups.length?11:10}.</span> Error Handling Requirements</h2>
-  <ul>${li(n?.errorHandlingRequirements||['Invalid records must be identified and flagged','Error codes and messages must be generated for invalid inputs','Invalid records must not proceed to downstream processing'])}</ul>
-  ${ctx.filterConditions.length?`<h3>Filter Logic Found</h3><ul>${ctx.filterConditions.map(f=>`<li><code style="font-size:11px">${escHtml(f.substring(0,120))}</code></li>`).join('')}</ul>`:''}
+  ${sec('Assumptions',`<ul>${li(n?.assumptions||['Source data is provided in the expected format','Reference / lookup tables are accurate and maintained','Downstream systems consume the standardised output'])}</ul>`)}
 
-  <h2><span class="section-num">${ctx.lookups.length?12:11}.</span> Success Criteria</h2>
-  <ul>${li(n?.successCriteria||['Data is processed consistently and accurately','Invalid records are flagged without blocking valid records','Downstream systems receive standardised output'])}</ul>
+  ${sec('Summary',`<p>${escHtml(n?.summary||'')}</p>`,!n?.summary)}
 
-  <h2><span class="section-num">${ctx.lookups.length?13:12}.</span> Business Benefits</h2>
-  <ul>${li(n?.businessBenefits||['Improved data quality across the organisation','Reduced manual data cleansing effort','Improved downstream reporting accuracy'])}</ul>
+  ${sec('Transformation Inventory',`
+    <table>
+      <thead><tr><th>Transformation</th><th>Category</th><th>Items</th></tr></thead>
+      <tbody>${txRows||'<tr><td colspan="3" style="color:#94a3b8">No transformations catalogued</td></tr>'}</tbody>
+    </table>
+  `)}
 
-  <h2><span class="section-num">${ctx.lookups.length?14:13}.</span> Assumptions</h2>
-  <ul>${li(n?.assumptions||['Source system provides data in the expected format','Informatica IDQ standardisation libraries are configured and available','Downstream systems are capable of consuming cleansed output'])}</ul>`;
+  ${ctx.subMapplets.length?sec('Sub-Rules Referenced',`<ul>${ctx.subMapplets.map(m=>`<li><code style="font-size:11px">${escHtml(m)}</code></li>`).join('')}</ul>`):''}
+
+  ${ctx.matchRules.length?sec('Match Rule Catalogue',`
+    <table>
+      <thead><tr><th>Rule Name</th><th>Category</th><th>Priority Code</th></tr></thead>
+      <tbody>${matchRows}</tbody>
+    </table>
+  `):''}
+  `;
 }
 
 function humaniseName(n){return n.replace(/^(mplt_|rule_)/i,'').replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
