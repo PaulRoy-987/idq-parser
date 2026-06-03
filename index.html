@@ -665,8 +665,24 @@ function extractAll(xmlStr){
       handled=true; return;
     }
     if(txType.includes('normtx')){
+      // Extract only structural NormalizerNode entries (those with a nodeType like RECORD)
+      const structNodes=[];
+      Array.from(tx.querySelectorAll('*')).forEach(c=>{
+        const ctype=(c.getAttributeNS('http://www.w3.org/2001/XMLSchema-instance','type')||c.getAttribute('type')||'').toLowerCase();
+        if(!ctype.includes('normalizernode')) return;
+        const nodeName=c.getAttribute('name')||'';
+        const occurs=parseInt(c.getAttribute('occurs')||'1');
+        const nodeType=c.getAttribute('nodeType')||'';
+        if(nodeType) structNodes.push({nodeName,occurs,nodeType}); // only structural nodes
+      });
+      const maxOccurs=structNodes.length?Math.max(...structNodes.map(n=>n.occurs)):0;
+      const summary=maxOccurs>1
+        ?`Normalizer — each input record produces ${maxOccurs} output rows by repeating the record group ${maxOccurs} times`
+        :`Normalizer — restructures input records by pivoting repeated column groups into separate output rows`;
+      const nodeDesc=structNodes.length
+        ?'\n'+structNodes.map(n=>`• Record group "${n.nodeName}" — repeated ${n.occurs} time${n.occurs!==1?'s':''} per input (${n.nodeType})`).join('\n'):'';
       rules.push({type:'special',category:'Normalizer',txName,ruleName:txName,priority:'—',priorityClass:'none',
-        criteria:'Normalizer — pivots or restructures record layout\nExpands repeated columns into multiple rows or vice versa',exprType:'normalizer'});
+        criteria:summary+nodeDesc+'\n• Each repeated row is processed independently by downstream transformations',exprType:'normalizer'});
       handled=true; return;
     }
     if(txType.includes('avtx')){
@@ -732,13 +748,24 @@ function processField(txName,fn,decoded,rules){
   const hasIIF=upper.startsWith('IIF')||upper.includes('\nIIF')||upper.includes(' IIF(');
   const hasDECODE=upper.startsWith('DECODE')||upper.includes('\nDECODE');
   const cat=categorize(txName,fn);
-  if(isMatch&&hasIIF){parseIIFChain(decoded).forEach((r,i)=>rules.push({type:cat.type,category:cat.label,txName,exprType:'iif',ruleName:r.label||(fn+' · rule '+(i+1)),priority:r.result,priorityClass:priorityClass(r.result),criteria:cleanCriteria(r.condition)}));}
+  if(isMatch&&hasIIF){
+    const parsed=parseIIFChain(decoded);
+    if(parsed.length>0){
+      parsed.forEach((r,i)=>rules.push({type:cat.type,category:cat.label,txName,exprType:'iif',ruleName:r.label||(fn+' · rule '+(i+1)),priority:r.result,priorityClass:priorityClass(r.result),criteria:cleanCriteria(r.condition)}));
+    } else {
+      // IIF chain has 'NO MATCH FOUND' but returns field references not literals
+      // (e.g. a priority selector/aggregator) — show as a scored logic expression
+      rules.push({type:cat.type==='filter'?'filter':'logic',category:cat.label,txName,exprType:'iif',
+        ruleName:fn,priority:'—',priorityClass:'none',criteria:summariseExpr(fn,decoded)});
+    }
+  }
   else if(hasDECODE){const pd=parseDECODEChain(decoded);if(pd&&pd.length){rules.push({type:cat.type==='filter'?'filter':'logic',category:cat.label,txName,exprType:'decode',ruleName:fn,priority:'—',priorityClass:'none',criteria:decoded.substring(0,500),criteriaHtml:buildDecodeHtml(pd)});}else{rules.push({type:'logic',category:cat.label,txName,exprType:'expr',ruleName:fn,priority:'—',priorityClass:'none',criteria:summariseExpr(fn,decoded)});}}
   else if(hasIIF){rules.push({type:cat.type==='filter'?'filter':'logic',category:cat.label,txName,exprType:'iif',ruleName:fn,priority:'—',priorityClass:'none',criteria:summariseExpr(fn,decoded)});}
   else{if(decoded.length>fn.length+2&&/[()=<>!|]/.test(decoded))rules.push({type:'logic',category:cat.label,txName,exprType:'expr',ruleName:fn,priority:'—',priorityClass:'none',criteria:decoded.substring(0,400)});}
 }
 
-function parseIIFChain(expr){const results=[];function node(s,d){if(d>60||!s)return;s=s.trimStart();if(s.startsWith('(')&&!s.toUpperCase().startsWith('IIF')){node(s.slice(1).trimStart(),d+1);return;}if(!s.toUpperCase().startsWith('IIF'))return;const pi=s.indexOf('(');if(pi===-1)return;const args=splitIIFArgs(s,pi+1);if(!args)return;const[cond,trueP,falseP]=args;const ts=trueP.trim();if(ts.startsWith("'")&&ts.lastIndexOf("'")>0){const rv=ts.slice(1,ts.lastIndexOf("'"));if(rv&&rv.toUpperCase()!=='NO MATCH FOUND'&&rv.toUpperCase()!=='TRANSFORMATION ERROR'){const cm=cond.match(/^\s*--\s*([^\n\r]+)/);results.push({label:cm?cm[1].trim():'',condition:cond.replace(/^\s*--[^\n\r]*[\n\r]+/gm,'').trim(),result:rv});}}else node(ts,d+1);if(falseP)node(falseP.trim(),d+1);}node(expr.trim(),0);return results;}
+function parseIIFChain(expr){const results=[];function extractLabel(cond){const lines=cond.split(/[\r\n]+/);for(const line of lines){const m=line.match(/^\s*--\s*(.+)/);if(!m)continue;let content=m[1].trim();if(/^[=\-*#\s]+$/.test(content))continue;// strip surrounding decorators e.g. "=== LABEL ===" → "LABEL"
+content=content.replace(/^[=\-*#+\s]+/,'').replace(/[=\-*#+\s]+$/,'').trim();if(content)return content;}return'';}function node(s,d){if(d>60||!s)return;s=s.trimStart();if(s.startsWith('(')&&!s.toUpperCase().startsWith('IIF')){node(s.slice(1).trimStart(),d+1);return;}if(!s.toUpperCase().startsWith('IIF'))return;const pi=s.indexOf('(');if(pi===-1)return;const args=splitIIFArgs(s,pi+1);if(!args)return;const[cond,trueP,falseP]=args;const ts=trueP.trim();if(ts.startsWith("'")&&ts.lastIndexOf("'")>0){const rv=ts.slice(1,ts.lastIndexOf("'"));if(rv&&rv.toUpperCase()!=='NO MATCH FOUND'&&rv.toUpperCase()!=='TRANSFORMATION ERROR'){results.push({label:extractLabel(cond),condition:cond.replace(/^\s*--[^\n\r]*[\n\r]+/gm,'').trim(),result:rv});}}else node(ts,d+1);if(falseP)node(falseP.trim(),d+1);}node(expr.trim(),0);return results;}
 
 function splitIIFArgs(str,si){const args=[];let d=0,inS=false,cur='';for(let i=si;i<str.length;i++){const ch=str[i];if(inS){if(ch==="'"&&str[i+1]==="'"){cur+="''";i++;continue;}if(ch==="'")inS=false;cur+=ch;continue;}if(ch==="'"){inS=true;cur+=ch;continue;}if(ch==='('){d++;cur+=ch;continue;}if(ch===')'){if(d===0){args.push(cur);break;}d--;cur+=ch;continue;}if(ch===','&&d===0&&args.length<2){args.push(cur);cur='';continue;}cur+=ch;}if(args.length===2&&cur)args.push(cur);return args.length===3?args:null;}
 
@@ -752,7 +779,7 @@ function categorize(txName,fn){const s=(txName+' '+fn).toLowerCase();if(s.includ
 
 function priorityClass(v){const n=parseFloat(v);if(isNaN(n))return'none';if(n>=1700||(n>0&&n<100&&n>=50))return'high';if(n>=1000||(n>0&&n<100&&n>=25))return'mid';return'low';}
 
-function cleanCriteria(c){if(!c)return'';return c.replace(/LTRIM\(RTRIM\(([^)]+)\)\)/g,'$1').replace(/LTRIM\(RTRIM\(/g,'').replace(/^\s*--[^\n\r]*[\n\r]+/gm,'').replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim().substring(0,500);}
+function cleanCriteria(c){if(!c)return'';return c.replace(/LTRIM\(RTRIM\(([^)]+)\)\)/g,'$1').replace(/LTRIM\(RTRIM\(/g,'').replace(/^\s*--[^\n\r]*[\n\r]+/gm,'').replace(/\r\n/g,'\n').replace(/\n{3,}/g,'\n\n').trim().substring(0,1500);}
 
 function summariseExpr(fn,expr){const lo=expr.toLowerCase();const ops=[];if(lo.includes('reg_match')||lo.includes('reg_replace'))ops.push('Regex');if(lo.includes('length('))ops.push('Length');if(lo.includes('instr('))ops.push('String search');if(lo.includes('substr('))ops.push('Substring');if(lo.includes('ltrim')||lo.includes('rtrim'))ops.push('Trim');if(lo.includes('upper(')||lo.includes('lower('))ops.push('Case');if(lo.includes('replacechr')||lo.includes('replace('))ops.push('Replace');if(lo.includes('iif'))ops.push('IIF');if(lo.includes('is_number')||lo.includes('isnull'))ops.push('Null check');const tag=ops.length?ops.join(' · '):'Expression';return`[${tag}]\n`+expr.trim().replace(/\r\n/g,' ').replace(/\n/g,' ').substring(0,200);}
 
